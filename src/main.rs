@@ -1,6 +1,12 @@
-use kafka_starter::adapters::incoming::tcp_adapter::TcpAdapter;
-use kafka_starter::config::AppConfig;
-use kafka_starter::Result;
+mod adapters;
+mod application;
+mod config;
+mod domain;
+mod ports;
+
+use crate::adapters::incoming::tcp_adapter::TcpAdapter;
+use crate::config::AppConfig;
+use crate::application::{Result, ApplicationError};
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -10,7 +16,9 @@ async fn main() -> Result<()> {
         "127.0.0.1:9092",
         config.message_handler,
         config.protocol_parser,
-    )?;
+    ).await?;
     
-    server.run().await
+    server.run().await?;
+    
+    Ok(())
 }
