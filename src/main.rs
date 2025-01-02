@@ -1,20 +1,17 @@
-#![allow(unused_imports)]
-use std::net::TcpListener;
+use std::sync::Arc;
+use kafka_starter::adapters::incoming::tcp_adapter::TcpAdapter;
+use kafka_starter::adapters::outgoing::memory_store::MemoryMessageStore;
+use kafka_starter::application::broker::KafkaBroker;
+use kafka_starter::Result;
 
-fn main() {
-    // You can use print statements as follows for debugging, they'll be visible when running tests.
-    println!("Logs from your program will appear here!");
-
-    let listener = TcpListener::bind("127.0.0.1:9092").unwrap();
-
-    for stream in listener.incoming() {
-        match stream {
-            Ok(_stream) => {
-                println!("accepted new connection");
-            }
-            Err(e) => {
-                println!("error: {}", e);
-            }
-        }
-    }
+#[tokio::main]
+async fn main() -> Result<()> {
+    let message_store = Box::new(MemoryMessageStore::new());
+    let broker = Arc::new(KafkaBroker::new(message_store));
+    
+    let server = TcpAdapter::new(
+        "127.0.0.1:9092",
+        broker.clone(),
+    )?;
+    server.run().await
 }

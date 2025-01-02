@@ -3,9 +3,18 @@ name = "codecrafters-kafka"
 version = "0.1.0"
 authors = ["Codecrafters <hello@codecrafters.io>"]
 edition = "2021"
-rust-version = "1.80"
 
 [dependencies]
-anyhow = "1.0.68"                                # error handling
-bytes = "1.3.0"                                  # helps manage buffers
-thiserror = "1.0.38"                             # error handling
+anyhow = "1.0.68"
+bytes = "1.3.0"
+thiserror = "1.0.38"
+tokio = { version = "1.28.0", features = ["full"] }
+async-trait = "0.1.68"
+
+[lib]
+name = "kafka_starter"
+path = "src/lib.rs"
+
+[[bin]]
+name = "codecrafters-kafka"
+path = "src/main.rs"
