@@ -1,5 +1,8 @@
 use crate::Result;
 
+const UNSUPPORTED_VERSION: i16 = 35;
+const MAX_SUPPORTED_VERSION: i16 = 4;
+
 #[derive(Debug, PartialEq)]
 pub struct RequestHeader {
     pub api_key: i16,
@@ -18,13 +21,20 @@ impl RequestHeader {
         let api_version = i16::from_be_bytes([buffer[2], buffer[3]]);
         let correlation_id = i32::from_be_bytes([buffer[4], buffer[5], buffer[6], buffer[7]]);
         
-        // client_id는 현재 없음
         Ok(RequestHeader {
             api_key,
             api_version,
             correlation_id,
             client_id: None,
         })
+    }
+
+    pub fn validate_version(&self) -> Option<i16> {
+        if self.api_version > MAX_SUPPORTED_VERSION {
+            Some(UNSUPPORTED_VERSION)
+        } else {
+            None
+        }
     }
 }
 
@@ -35,6 +45,7 @@ pub struct KafkaRequest {
 
 pub struct KafkaResponse {
     pub correlation_id: i32,
+    pub error_code: i16,
     pub payload: Vec<u8>,
 }
 
@@ -60,9 +71,10 @@ impl ProtocolParser {
 
     pub fn encode_response(&self, response: KafkaResponse) -> Vec<u8> {
         let mut buffer = Vec::new();
-        let total_size = (response.payload.len() + 4) as i32;
+        let total_size = (response.payload.len() + 6) as i32; // correlation_id(4) + error_code(2)
         buffer.extend_from_slice(&total_size.to_be_bytes());
         buffer.extend_from_slice(&response.correlation_id.to_be_bytes());
+        buffer.extend_from_slice(&response.error_code.to_be_bytes());
         buffer.extend_from_slice(&response.payload);
         buffer
     }
@@ -83,6 +95,45 @@ mod tests {
         assert_eq!(header.api_key, 18);
         assert_eq!(header.api_version, 4);
         assert_eq!(header.correlation_id, 1870644833);
+    }
+
+    #[test]
+    fn test_version_validation() {
+        // 지원되는 버전 테스트
+        let header = RequestHeader {
+            api_key: 18,
+            api_version: 4,
+            correlation_id: 1,
+            client_id: None,
+        };
+        assert_eq!(header.validate_version(), None);
+
+        // 지원되지 않는 버전 테스트
+        let header = RequestHeader {
+            api_key: 18,
+            api_version: 5,
+            correlation_id: 1,
+            client_id: None,
+        };
+        assert_eq!(header.validate_version(), Some(UNSUPPORTED_VERSION));
+    }
+
+    #[test]
+    fn test_response_with_error_code() {
+        let parser = ProtocolParser::new();
+        let response = KafkaResponse {
+            correlation_id: 42,
+            error_code: UNSUPPORTED_VERSION,
+            payload: Vec::new(),
+        };
+
+        let encoded = parser.encode_response(response);
+        
+        // error_code가 올바르게 인코딩되었는지 확인
+        assert_eq!(
+            i16::from_be_bytes([encoded[8], encoded[9]]), 
+            UNSUPPORTED_VERSION
+        );
     }
 
     #[test]
@@ -114,14 +165,16 @@ mod tests {
         let parser = ProtocolParser::new();
         let response = KafkaResponse {
             correlation_id: 7,
+            error_code: 0,
             payload: vec![1, 2, 3],
         };
 
         let encoded = parser.encode_response(response);
         
-        assert_eq!(i32::from_be_bytes([encoded[0], encoded[1], encoded[2], encoded[3]]), 7);
-        assert_eq!(i32::from_be_bytes([encoded[4], encoded[5], encoded[6], encoded[7]]), 7);
-        assert_eq!(&encoded[8..], &[1, 2, 3]);
+        assert_eq!(i32::from_be_bytes([encoded[0], encoded[1], encoded[2], encoded[3]]), 9); // 4(correlation_id) + 2(error_code) + 3(payload)
+        assert_eq!(i32::from_be_bytes([encoded[4], encoded[5], encoded[6], encoded[7]]), 7); // correlation_id
+        assert_eq!(i16::from_be_bytes([encoded[8], encoded[9]]), 0);  // error_code
+        assert_eq!(&encoded[10..], &[1, 2, 3]); // payload
     }
 
     #[test]
@@ -136,6 +189,7 @@ mod tests {
         let request = parser.parse_request(&request_data).unwrap();
         let response = KafkaResponse {
             correlation_id: request.header.correlation_id,
+            error_code: 0,
             payload: vec![1, 2, 3, 4],
         };
 

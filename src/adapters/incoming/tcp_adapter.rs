@@ -51,14 +51,10 @@ impl TcpAdapter {
         let request = protocol_parser.parse_request(&request_data)?;
         
         // 4. 비즈니스 로직 처리
-        let response = self.message_handler.handle_request(request.header.correlation_id, request.payload).await?;
+        let response = self.message_handler.handle_request(request).await?;
         
         // 5. 응답 인코딩 및 전송
-        let kafka_response = KafkaResponse {
-            correlation_id: response.correlation_id,
-            payload: response.payload,
-        };
-        let encoded = protocol_parser.encode_response(kafka_response);
+        let encoded = protocol_parser.encode_response(response);
         stream.write_all(&encoded).map_err(Error::Io)?;
         
         Ok(())
