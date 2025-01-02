@@ -1,4 +1,4 @@
-use crate::Result;
+use crate::domain::error::DomainError;
 
 pub const UNSUPPORTED_VERSION: i16 = 35;
 pub const MAX_SUPPORTED_VERSION: i16 = 4;
@@ -97,9 +97,9 @@ pub struct RequestHeader {
 }
 
 impl RequestHeader {
-    pub fn parse(buffer: &[u8]) -> Result<Self> {
+    pub fn parse(buffer: &[u8]) -> std::result::Result<Self, DomainError> {
         if buffer.len() < 8 {
-            return Err(crate::Error::InvalidRequest);
+            return Err(DomainError::InvalidRequest);
         }
         
         let api_key = i16::from_be_bytes([buffer[0], buffer[1]]);
@@ -141,9 +141,9 @@ impl ProtocolParser {
         Self
     }
 
-    pub fn parse_request(&self, buffer: &[u8]) -> Result<KafkaRequest> {
+    pub fn parse_request(&self, buffer: &[u8]) -> std::result::Result<KafkaRequest, DomainError> {
         if buffer.len() < 8 {
-            return Err(crate::Error::InvalidRequest);
+            return Err(DomainError::InvalidRequest);
         }
         
         let header = RequestHeader::parse(&buffer[0..])?;
@@ -254,7 +254,7 @@ mod tests {
         let test_data = vec![1, 2, 3];
 
         let result = parser.parse_request(&test_data);
-        assert!(matches!(result, Err(crate::Error::InvalidRequest)));
+        assert!(matches!(result, Err(DomainError::InvalidRequest)));
     }
 
     #[test]

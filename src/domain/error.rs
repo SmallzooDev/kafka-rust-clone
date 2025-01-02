@@ -1,11 +1,18 @@
-#[derive(Debug, thiserror::Error)]
-pub enum Error {
-    #[error("IO error: {0}")]
-    Io(#[from] std::io::Error),
-    #[error("Protocol error: {0}")]
-    Protocol(String),
-    #[error("Invalid request")]
+#[derive(Debug, Clone, PartialEq)]
+pub enum DomainError {
+    InvalidProtocol(String),
     InvalidRequest,
+    UnsupportedVersion,
 }
 
-pub type Result<T> = std::result::Result<T, Error>; 
+impl std::fmt::Display for DomainError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            DomainError::InvalidProtocol(msg) => write!(f, "Protocol error: {}", msg),
+            DomainError::InvalidRequest => write!(f, "Invalid request"),
+            DomainError::UnsupportedVersion => write!(f, "Unsupported version"),
+        }
+    }
+}
+
+impl std::error::Error for DomainError {} 
