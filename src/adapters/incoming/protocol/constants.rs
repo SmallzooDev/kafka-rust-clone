@@ -9,4 +9,13 @@ pub const MAX_SUPPORTED_VERSION: i16 = 4;
 /// ApiVersions API의 키 값
 /// Kafka 프로토콜에서 정의된 표준 API 키임
 /// 클라이언트가 브로커가 지원하는 API 버전을 조회할 때 사용함
-pub const API_VERSIONS_KEY: i16 = 18; 
+pub const API_VERSIONS_KEY: i16 = 18;
+
+/// DescribeTopicPartitions API의 키 값
+/// Kafka 프로토콜에서 정의된 표준 API 키임
+/// 클라이언트가 브로커가 지원하는 API 버전을 조회할 때 사용함
+pub const DESCRIBE_TOPIC_PARTITIONS_KEY: i16 = 75;
+
+/// DescribeTopicPartitions API는 버전 0만 지원
+pub const DESCRIBE_TOPIC_PARTITIONS_MAX_VERSION: i16 = 0;
+pub const DESCRIBE_TOPIC_PARTITIONS_MIN_VERSION: i16 = 0; 

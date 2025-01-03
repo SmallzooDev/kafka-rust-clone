@@ -19,25 +19,30 @@ pub fn encode_unsigned_varint(value: u32) -> Vec<u8> {
 pub fn encode_api_versions_response(error_code: i16, api_versions: &[(i16, i16, i16)]) -> Vec<u8> {
     let mut buffer = Vec::new();
     
-    // 1. error_code를 big-endian으로 인코딩함
+    // 1. ErrorCode (int16)
     buffer.extend_from_slice(&error_code.to_be_bytes());
     
-    // 2. api_versions 배열을 COMPACT_ARRAY 형식으로 인코딩함
-    buffer.extend_from_slice(&encode_unsigned_varint(api_versions.len() as u32 + 1));
+    // 2. ApiKeys (COMPACT_ARRAY of ApiVersion)
+    buffer.extend_from_slice(&encode_unsigned_varint((api_versions.len() + 1) as u32));
     
-    // 3. 각 ApiVersion 항목을 인코딩함
+    // 각 ApiVersion 항목
     for &(api_key, min_version, max_version) in api_versions {
+        // ApiKey (int16)
         buffer.extend_from_slice(&api_key.to_be_bytes());
+        // MinVersion (int16)
         buffer.extend_from_slice(&min_version.to_be_bytes());
+        // MaxVersion (int16)
         buffer.extend_from_slice(&max_version.to_be_bytes());
+        // TagBuffer for ApiVersion
+        buffer.extend_from_slice(&encode_unsigned_varint(0));
     }
     
-    // 4. throttle_time_ms를 0으로 설정하여 인코딩함
-    buffer.extend_from_slice(&0i32.to_be_bytes());
+    // 3. ThrottleTimeMs (int32) - 정확히 4바이트로 인코딩
+    let throttle_time_ms: i32 = 0;
+    buffer.extend_from_slice(&throttle_time_ms.to_be_bytes());
     
-    // 5. tagged_fields 섹션을 빈 상태로 인코딩함
-    buffer.extend_from_slice(&encode_unsigned_varint(1));  // 섹션 길이 = 1
-    buffer.extend_from_slice(&encode_unsigned_varint(0));  // 태그 필드 개수 = 0
+    // 4. Final TagBuffer
+    buffer.extend_from_slice(&encode_unsigned_varint(0));
     
     buffer
 }
@@ -61,25 +66,33 @@ mod tests {
         let api_versions = vec![(API_VERSIONS_KEY, 0, MAX_SUPPORTED_VERSION)];
         let encoded = encode_api_versions_response(0, &api_versions);
         
-        // 1. error_code (2바이트) 검증
-        assert_eq!(i16::from_be_bytes([encoded[0], encoded[1]]), 0);
+        let mut index = 0;
         
-        // 2. api_versions 배열 길이 (COMPACT_ARRAY) 검증
-        assert_eq!(encoded[2], 2);  // 1개의 요소 -> 2로 인코딩됨
+        // 1. ErrorCode (2바이트)
+        assert_eq!(i16::from_be_bytes([encoded[index], encoded[index+1]]), 0);
+        index += 2;
         
-        // 3. ApiVersion 항목 필드 검증
-        // api_key (int16)
-        assert_eq!(i16::from_be_bytes([encoded[3], encoded[4]]), API_VERSIONS_KEY);
-        // min_version (int16)
-        assert_eq!(i16::from_be_bytes([encoded[5], encoded[6]]), 0);
-        // max_version (int16)
-        assert_eq!(i16::from_be_bytes([encoded[7], encoded[8]]), MAX_SUPPORTED_VERSION);
+        // 2. ApiKeys 배열 길이 (COMPACT_ARRAY)
+        assert_eq!(encoded[index], 2);  // 실제 길이 + 1 = 1 + 1 = 2
+        index += 1;
         
-        // 4. throttle_time_ms (int32) 검증
-        assert_eq!(i32::from_be_bytes([encoded[9], encoded[10], encoded[11], encoded[12]]), 0);
+        // 3. ApiVersion 항목
+        assert_eq!(i16::from_be_bytes([encoded[index], encoded[index+1]]), API_VERSIONS_KEY);
+        index += 2;
+        assert_eq!(i16::from_be_bytes([encoded[index], encoded[index+1]]), 0);
+        index += 2;
+        assert_eq!(i16::from_be_bytes([encoded[index], encoded[index+1]]), MAX_SUPPORTED_VERSION);
+        index += 2;
         
-        // 5. tagged_fields 섹션 검증
-        assert_eq!(encoded[13], 1);  // 섹션 길이
-        assert_eq!(encoded[14], 0);  // 태그 필드 개수
+        // ApiVersion의 TagBuffer
+        assert_eq!(encoded[index], 0);
+        index += 1;
+        
+        // 4. ThrottleTimeMs
+        assert_eq!(i32::from_be_bytes([encoded[index], encoded[index+1], encoded[index+2], encoded[index+3]]), 0);
+        index += 4;
+        
+        // 5. Final TagBuffer
+        assert_eq!(encoded[index], 0);
     }
 } 

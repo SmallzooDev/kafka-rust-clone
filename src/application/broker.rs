@@ -6,7 +6,7 @@ use crate::domain::message::{
     KafkaRequest, KafkaResponse, ApiVersionsResponse, ApiVersion, ResponsePayload
 };
 use crate::adapters::incoming::protocol::constants::{
-    API_VERSIONS_KEY, MAX_SUPPORTED_VERSION, UNSUPPORTED_VERSION
+    API_VERSIONS_KEY, MAX_SUPPORTED_VERSION, UNSUPPORTED_VERSION, DESCRIBE_TOPIC_PARTITIONS_KEY, DESCRIBE_TOPIC_PARTITIONS_MIN_VERSION, DESCRIBE_TOPIC_PARTITIONS_MAX_VERSION
 };
 
 pub struct KafkaBroker {
@@ -24,6 +24,11 @@ impl KafkaBroker {
                 api_key: API_VERSIONS_KEY,
                 min_version: 0,
                 max_version: MAX_SUPPORTED_VERSION,
+            },
+            ApiVersion {
+                api_key: DESCRIBE_TOPIC_PARTITIONS_KEY,
+                min_version: DESCRIBE_TOPIC_PARTITIONS_MIN_VERSION,
+                max_version: DESCRIBE_TOPIC_PARTITIONS_MAX_VERSION,
             }
         ];
         ApiVersionsResponse::new(api_versions)

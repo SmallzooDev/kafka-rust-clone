@@ -46,13 +46,13 @@ impl ProtocolParser for KafkaProtocolParser {
             }
         };
         
-        // 2. 전체 메시지 크기 계산 (correlation_id 크기(4) + 인코딩된 페이로드 크기)
-        let message_size = (4 + encoded_payload.len()) as i32;
+        // 2. 전체 메시지 크기 계산 (correlation_id + 페이로드)
+        let message_size = (4 + encoded_payload.len()) as i32;  // correlation_id(4) + payload
         
         // 3. 메시지 구성
-        buffer.extend_from_slice(&message_size.to_be_bytes());
-        buffer.extend_from_slice(&response.correlation_id.to_be_bytes());
-        buffer.extend_from_slice(&encoded_payload);
+        buffer.extend_from_slice(&message_size.to_be_bytes());  // Size 필드 (4바이트)
+        buffer.extend_from_slice(&response.correlation_id.to_be_bytes());  // ResponseHeader: correlation_id (4바이트)
+        buffer.extend_from_slice(&encoded_payload);  // ProtocolBody
         
         buffer
     }
@@ -105,12 +105,7 @@ mod tests {
         let encoded = parser.encode_response(response);
         
         // 1. 전체 메시지 크기 검증
-        let expected_size = 4 + // correlation_id
-                           2 + // error_code
-                           1 + // array length
-                           6 + // api version entry (2+2+2)
-                           4 + // throttle_time
-                           2;  // tagged fields
+        let expected_size = 19;  // correlation_id(4) + error_code(2) + array_length(1) + api_version(6) + api_version_tag_buffer(1) + throttle_time(4) + final_tag_buffer(1)
         assert_eq!(i32::from_be_bytes([encoded[0], encoded[1], encoded[2], encoded[3]]), expected_size);
         
         // 2. correlation_id 검증
@@ -118,7 +113,7 @@ mod tests {
         
         // 3. payload 검증 (ApiVersions 응답 형식)
         assert_eq!(i16::from_be_bytes([encoded[8], encoded[9]]), 0);  // error_code
-        assert_eq!(encoded[10], 2);  // array length (1 + 1)
+        assert_eq!(encoded[10], 2);  // array length (실제 길이 + 1)
         assert_eq!(i16::from_be_bytes([encoded[11], encoded[12]]), API_VERSIONS_KEY);
         assert_eq!(i16::from_be_bytes([encoded[13], encoded[14]]), 0);
         assert_eq!(i16::from_be_bytes([encoded[15], encoded[16]]), MAX_SUPPORTED_VERSION);

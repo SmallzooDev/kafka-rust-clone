@@ -1,3 +1,9 @@
+use crate::adapters::incoming::protocol::constants::{
+    API_VERSIONS_KEY, MAX_SUPPORTED_VERSION, UNSUPPORTED_VERSION,
+    DESCRIBE_TOPIC_PARTITIONS_KEY, DESCRIBE_TOPIC_PARTITIONS_MIN_VERSION,
+    DESCRIBE_TOPIC_PARTITIONS_MAX_VERSION
+};
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct ApiVersion {
     pub api_key: i16,
@@ -142,12 +148,23 @@ mod tests {
                 api_key: API_VERSIONS_KEY,
                 min_version: 0,
                 max_version: MAX_SUPPORTED_VERSION,
+            },
+            ApiVersion {
+                api_key: DESCRIBE_TOPIC_PARTITIONS_KEY,
+                min_version: DESCRIBE_TOPIC_PARTITIONS_MIN_VERSION,
+                max_version: DESCRIBE_TOPIC_PARTITIONS_MAX_VERSION,
             }
         ];
         let response = ApiVersionsResponse::new(api_versions);
-        assert_eq!(response.api_versions.len(), 1);
+        
+        // APIVersions API 검증
         assert_eq!(response.api_versions[0].api_key, API_VERSIONS_KEY);
         assert_eq!(response.api_versions[0].min_version, 0);
         assert_eq!(response.api_versions[0].max_version, MAX_SUPPORTED_VERSION);
+        
+        // DescribeTopicPartitions API 검증
+        assert_eq!(response.api_versions[1].api_key, DESCRIBE_TOPIC_PARTITIONS_KEY);
+        assert_eq!(response.api_versions[1].min_version, DESCRIBE_TOPIC_PARTITIONS_MIN_VERSION);
+        assert_eq!(response.api_versions[1].max_version, DESCRIBE_TOPIC_PARTITIONS_MAX_VERSION);
     }
 } 
