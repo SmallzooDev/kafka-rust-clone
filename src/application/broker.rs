@@ -3,10 +3,13 @@ use crate::ports::outgoing::message_store::MessageStore;
 use crate::Result;
 use async_trait::async_trait;
 use crate::domain::message::{
-    KafkaRequest, KafkaResponse, ApiVersionsResponse, ApiVersion, ResponsePayload
+    KafkaRequest, KafkaResponse, ApiVersionsResponse, ApiVersion, ResponsePayload,
+    RequestPayload, DescribeTopicPartitionsResponse
 };
 use crate::adapters::incoming::protocol::constants::{
-    API_VERSIONS_KEY, MAX_SUPPORTED_VERSION, UNSUPPORTED_VERSION, DESCRIBE_TOPIC_PARTITIONS_KEY, DESCRIBE_TOPIC_PARTITIONS_MIN_VERSION, DESCRIBE_TOPIC_PARTITIONS_MAX_VERSION
+    API_VERSIONS_KEY, MAX_SUPPORTED_VERSION, UNSUPPORTED_VERSION,
+    DESCRIBE_TOPIC_PARTITIONS_KEY, DESCRIBE_TOPIC_PARTITIONS_MIN_VERSION,
+    DESCRIBE_TOPIC_PARTITIONS_MAX_VERSION, UNKNOWN_TOPIC_OR_PARTITION
 };
 
 pub struct KafkaBroker {
@@ -56,6 +59,20 @@ impl MessageHandler for KafkaBroker {
                     ResponsePayload::ApiVersions(self.create_api_versions_response()),
                 ))
             }
+            DESCRIBE_TOPIC_PARTITIONS_KEY => {
+                match &request.payload {
+                    RequestPayload::DescribeTopicPartitions(req) => {
+                        Ok(KafkaResponse::new(
+                            request.header.correlation_id,
+                            UNKNOWN_TOPIC_OR_PARTITION,
+                            ResponsePayload::DescribeTopicPartitions(
+                                DescribeTopicPartitionsResponse::new_unknown_topic(req.topic_name.clone())
+                            ),
+                        ))
+                    }
+                    _ => unreachable!(),
+                }
+            }
             _ => Ok(KafkaResponse::new(
                 request.header.correlation_id,
                 0,
@@ -66,9 +83,21 @@ impl MessageHandler for KafkaBroker {
 }
 
 fn validate_version(request: &KafkaRequest) -> Option<i16> {
-    if request.header.api_version < 0 || request.header.api_version > MAX_SUPPORTED_VERSION {
-        Some(UNSUPPORTED_VERSION)
-    } else {
-        None
+    match request.header.api_key {
+        API_VERSIONS_KEY => {
+            if request.header.api_version >= 0 && request.header.api_version <= 4 {
+                None
+            } else {
+                Some(UNSUPPORTED_VERSION)
+            }
+        }
+        DESCRIBE_TOPIC_PARTITIONS_KEY => {
+            if request.header.api_version == 0 {
+                None
+            } else {
+                Some(UNSUPPORTED_VERSION)
+            }
+        }
+        _ => Some(UNSUPPORTED_VERSION)
     }
 } 

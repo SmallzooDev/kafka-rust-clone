@@ -4,7 +4,7 @@ pub const UNSUPPORTED_VERSION: i16 = 35;
 
 /// 현재 브로커가 지원하는 최대 API 버전
 /// ApiVersions 요청에 대한 응답에서 사용됨
-pub const MAX_SUPPORTED_VERSION: i16 = 4;
+pub const MAX_SUPPORTED_VERSION: i16 = 0;
 
 /// ApiVersions API의 키 값
 /// Kafka 프로토콜에서 정의된 표준 API 키임
@@ -18,4 +18,7 @@ pub const DESCRIBE_TOPIC_PARTITIONS_KEY: i16 = 75;
 
 /// DescribeTopicPartitions API는 버전 0만 지원
 pub const DESCRIBE_TOPIC_PARTITIONS_MAX_VERSION: i16 = 0;
-pub const DESCRIBE_TOPIC_PARTITIONS_MIN_VERSION: i16 = 0; 
+pub const DESCRIBE_TOPIC_PARTITIONS_MIN_VERSION: i16 = 0;
+
+/// Error codes
+pub const UNKNOWN_TOPIC_OR_PARTITION: i16 = 3; 

@@ -3,6 +3,7 @@ use crate::adapters::incoming::protocol::constants::{
     DESCRIBE_TOPIC_PARTITIONS_KEY, DESCRIBE_TOPIC_PARTITIONS_MIN_VERSION,
     DESCRIBE_TOPIC_PARTITIONS_MAX_VERSION
 };
+use bytes::Buf;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct ApiVersion {
@@ -36,9 +37,9 @@ impl RequestHeader {
             return Err(crate::domain::error::DomainError::InvalidRequest);
         }
         
-        let api_key = i16::from_be_bytes([buffer[0], buffer[1]]);
-        let api_version = i16::from_be_bytes([buffer[2], buffer[3]]);
-        let correlation_id = i32::from_be_bytes([buffer[4], buffer[5], buffer[6], buffer[7]]);
+        let api_key = (&buffer[..2]).get_u16() as i16;
+        let api_version = (&buffer[2..4]).get_u16() as i16;
+        let correlation_id = (&buffer[4..8]).get_u32() as i32;
         
         Ok(RequestHeader {
             api_key,
@@ -50,20 +51,66 @@ impl RequestHeader {
 }
 
 #[derive(Debug, Clone, PartialEq)]
+pub struct DescribeTopicPartitionsRequest {
+    pub topic_name: String,
+    pub partitions: Vec<i32>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct DescribeTopicPartitionsResponse {
+    pub topic_name: String,
+    pub topic_id: [u8; 16],  // UUID as 16 bytes
+    pub error_code: i16,     // topic level error code
+    pub is_internal: bool,   // is_internal flag
+    pub partitions: Vec<PartitionInfo>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct PartitionInfo {
+    pub partition_id: i32,
+    pub error_code: i16,
+}
+
+impl DescribeTopicPartitionsResponse {
+    pub fn new_unknown_topic(topic_name: String) -> Self {
+        Self {
+            topic_name,
+            topic_id: [0; 16],  // 00000000-0000-0000-0000-000000000000
+            error_code: 3,      // UNKNOWN_TOPIC_OR_PARTITION
+            is_internal: false, // external topic
+            partitions: vec![],
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
 pub enum RequestPayload {
     ApiVersions,
-    // 향후 다른 요청 타입들도 여기에 추가
+    DescribeTopicPartitions(DescribeTopicPartitionsRequest),
 }
 
 #[derive(Debug, Clone)]
 pub struct KafkaRequest {
     pub header: RequestHeader,
     pub payload: RequestPayload,
+    pub error_code: i16,
 }
 
 impl KafkaRequest {
     pub fn new(header: RequestHeader, payload: RequestPayload) -> Self {
-        Self { header, payload }
+        Self {
+            header,
+            payload,
+            error_code: 0,
+        }
+    }
+
+    pub fn new_with_error(header: RequestHeader, payload: RequestPayload, error_code: i16) -> Self {
+        Self {
+            header,
+            payload,
+            error_code,
+        }
     }
 }
 
@@ -77,7 +124,7 @@ pub struct KafkaResponse {
 #[derive(Debug, Clone, PartialEq)]
 pub enum ResponsePayload {
     ApiVersions(ApiVersionsResponse),
-    // 향후 다른 응답 타입들도 여기에 추가
+    DescribeTopicPartitions(DescribeTopicPartitionsResponse),
 }
 
 impl KafkaResponse {
