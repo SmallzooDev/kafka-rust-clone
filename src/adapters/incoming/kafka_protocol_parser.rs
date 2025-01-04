@@ -181,7 +181,25 @@ impl ProtocolParser for KafkaProtocolParser {
                 buf.put_i8(describe_response.is_internal as i8);
                 
                 // partitions array (COMPACT_ARRAY)
-                buf.put_i8(1);
+                buf.put_i8((describe_response.partitions.len() + 1) as i8);
+                
+                // Write each partition
+                for partition in &describe_response.partitions {
+                    buf.put_i16(partition.error_code);  // partition error code
+                    buf.put_i32(partition.partition_id);  // partition id
+                    buf.put_i32(0);  // leader id
+                    
+                    // replica nodes (empty array)
+                    buf.put_i8(1);  // array length + 1
+                    
+                    // isr nodes (empty array)
+                    buf.put_i8(1);  // array length + 1
+                    
+                    // offline replicas (empty array)
+                    buf.put_i8(1);  // array length + 1
+                    
+                    buf.put_i8(0);  // TAG_BUFFER
+                }
                 
                 // topic authorized operations
                 buf.put_u32(0x00000df8);
