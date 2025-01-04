@@ -4,21 +4,25 @@ mod config;
 mod domain;
 mod ports;
 
-use crate::adapters::incoming::tcp_adapter::TcpAdapter;
+use crate::application::Result;
+use std::sync::Arc;
 use crate::config::AppConfig;
-use crate::application::{Result, ApplicationError};
+use crate::adapters::incoming::tcp_adapter::TcpAdapter;
+use crate::adapters::incoming::kafka_protocol_parser::KafkaProtocolParser;
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    let config = AppConfig::new();
-    
-    let server = TcpAdapter::new(
-        "127.0.0.1:9092",
-        config.message_handler,
-        config.protocol_parser,
+    let addr = "127.0.0.1:9092";
+    let config = AppConfig::new("server.properties");
+    let protocol_parser = Arc::new(KafkaProtocolParser::new());
+
+    let adapter = TcpAdapter::new(
+        addr,
+        config.broker,
+        protocol_parser,
     ).await?;
-    
-    server.run().await?;
-    
+
+    adapter.run().await?;
+
     Ok(())
 }

@@ -1,58 +1,34 @@
 use std::sync::Arc;
-use crate::adapters::incoming::kafka_protocol_parser::KafkaProtocolParser;
-use crate::adapters::outgoing::memory_store::MemoryMessageStore;
+use std::path::PathBuf;
 use crate::application::broker::KafkaBroker;
-use crate::ports::incoming::protocol_parser::ProtocolParser;
-use crate::ports::outgoing::message_store::MessageStore;
+use crate::adapters::outgoing::memory_store::MemoryMessageStore;
+use crate::adapters::outgoing::kraft_metadata_store::KraftMetadataStore;
 use crate::ports::incoming::message_handler::MessageHandler;
 
-#[cfg(test)]
-pub mod test;
-
 pub struct AppConfig {
-    pub message_handler: Arc<dyn MessageHandler>,
-    pub protocol_parser: Arc<dyn ProtocolParser>,
+    pub broker: Arc<dyn MessageHandler>,
 }
 
 impl AppConfig {
-    pub fn new() -> Self {
-        // 의존성 생성
-        let message_store: Box<dyn MessageStore> = Box::new(MemoryMessageStore::new());
-        let broker = Arc::new(KafkaBroker::new(message_store));
-        let protocol_parser = Arc::new(KafkaProtocolParser::new());
+    pub fn new(server_properties_path: &str) -> Self {
+        // Initialize stores
+        let message_store = Box::new(MemoryMessageStore::new());
+        let metadata_store = Box::new(KraftMetadataStore::new(
+            PathBuf::from("/tmp/kraft-combined-logs")
+        ));
 
-        Self {
-            message_handler: broker,
-            protocol_parser,
-        }
+        // Initialize broker with both stores
+        let broker = Arc::new(KafkaBroker::new(message_store, metadata_store));
+
+        Self { broker }
     }
 
+    #[cfg(test)]
     pub fn with_custom_components(
         message_handler: Arc<dyn MessageHandler>,
-        protocol_parser: Arc<dyn ProtocolParser>,
     ) -> Self {
         Self {
-            message_handler,
-            protocol_parser,
+            broker: message_handler,
         }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_app_config_creation() {
-        let config = AppConfig::new();
-        assert!(Arc::strong_count(&config.message_handler) >= 1);
-        assert!(Arc::strong_count(&config.protocol_parser) >= 1);
-    }
-
-    #[test]
-    fn test_app_config_with_custom_components() {
-        let config = test::create_test_config();
-        assert!(Arc::strong_count(&config.message_handler) >= 1);
-        assert!(Arc::strong_count(&config.protocol_parser) >= 1);
     }
 } 

@@ -1,6 +1,6 @@
 use crate::ports::incoming::message_handler::MessageHandler;
 use crate::ports::incoming::protocol_parser::ProtocolParser;
-use crate::ApplicationError;
+use crate::application::ApplicationError;
 use crate::Result;
 use std::sync::Arc;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};

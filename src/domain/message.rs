@@ -139,6 +139,42 @@ pub struct KafkaMessage {
     pub payload: Vec<u8>,
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub struct TopicMetadata {
+    pub name: String,
+    pub topic_id: [u8; 16],  // UUID as 16 bytes
+    pub partitions: Vec<PartitionMetadata>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct PartitionMetadata {
+    pub partition_index: i32,
+    pub leader_id: i32,
+    pub replica_nodes: Vec<i32>,
+    pub isr_nodes: Vec<i32>,  // in-sync replicas
+}
+
+impl TopicMetadata {
+    pub fn new(name: String, topic_id: [u8; 16], partitions: Vec<PartitionMetadata>) -> Self {
+        Self {
+            name,
+            topic_id,
+            partitions,
+        }
+    }
+}
+
+impl PartitionMetadata {
+    pub fn new(partition_index: i32, leader_id: i32, replica_nodes: Vec<i32>, isr_nodes: Vec<i32>) -> Self {
+        Self {
+            partition_index,
+            leader_id,
+            replica_nodes,
+            isr_nodes,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
