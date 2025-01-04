@@ -145,19 +145,15 @@ impl ProtocolParser for KafkaProtocolParser {
                 buf.put_i16(response.error_code);
                 
                 // array of api keys
-                buf.put_i8(2 + 1); // array length + 1
+                buf.put_i8((api_versions.api_versions.len() + 1) as i8);
                 
-                // ApiVersions
-                buf.put_i16(API_VERSIONS_KEY);
-                buf.put_i16(0); // min version
-                buf.put_i16(4); // max version
-                buf.put_i8(0); // TAG_BUFFER
-                
-                // DescribeTopicPartitions
-                buf.put_i16(DESCRIBE_TOPIC_PARTITIONS_KEY);
-                buf.put_i16(0); // min version
-                buf.put_i16(0); // max version
-                buf.put_i8(0); // TAG_BUFFER
+                // Write each API version
+                for version in &api_versions.api_versions {
+                    buf.put_i16(version.api_key);
+                    buf.put_i16(version.min_version);
+                    buf.put_i16(version.max_version);
+                    buf.put_i8(0); // TAG_BUFFER
+                }
                 
                 // throttle time ms
                 buf.put_i32(0);
@@ -171,18 +167,18 @@ impl ProtocolParser for KafkaProtocolParser {
                 buf.put_i8(2);  // array_length + 1
                 
                 // topic error code
-                buf.put_i16(UNKNOWN_TOPIC_OR_PARTITION);
+                buf.put_i16(describe_response.error_code);
                 
                 // topic name (COMPACT_STRING)
                 let topic_name_bytes = describe_response.topic_name.as_bytes();
                 buf.put_i8((topic_name_bytes.len() + 1) as i8);
                 buf.put_slice(topic_name_bytes);
                 
-                // topic id (UUID - 16 bytes of zeros for unknown topic)
-                buf.put_slice(&[0u8; 16]);
+                // topic id (UUID)
+                buf.put_slice(&describe_response.topic_id);
                 
                 // is_internal
-                buf.put_i8(0);
+                buf.put_i8(describe_response.is_internal as i8);
                 
                 // partitions array (COMPACT_ARRAY)
                 buf.put_i8(1);
@@ -228,20 +224,6 @@ fn decode_varint(buf: &[u8]) -> u64 {
     result
 }
 
-fn encode_unsigned_varint(buf: &mut BytesMut, mut value: u64) {
-    loop {
-        let mut byte = (value & 0x7f) as u8;
-        value >>= 7;
-        if value != 0 {
-            byte |= 0x80;
-        }
-        buf.put_u8(byte);
-        if value == 0 {
-            break;
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -259,9 +241,10 @@ mod tests {
         data.extend_from_slice(&0i16.to_be_bytes());  // API Version
         data.extend_from_slice(&123i32.to_be_bytes());  // Correlation ID
         data.extend_from_slice(&0i16.to_be_bytes());  // Client ID length (0 = null)
+        data.push(0); // tag buffer
 
         let parser = KafkaProtocolParser::new();
-        let request = parser.parse_request(&data).unwrap();
+        let request = parser.parse_request(&data[4..]).unwrap();  // Skip message size
 
         assert_eq!(request.header.api_key, API_VERSIONS_KEY);
         assert_eq!(request.header.api_version, 0);
@@ -274,35 +257,41 @@ mod tests {
     fn test_parse_describe_topic_partitions_request() {
         let mut data = Vec::new();
         
-        // Build the message first to calculate size
-        let mut message = Vec::new();
-        
         // Header
-        message.extend_from_slice(&DESCRIBE_TOPIC_PARTITIONS_KEY.to_be_bytes());  // API Key
-        message.extend_from_slice(&0i16.to_be_bytes());  // API Version
-        message.extend_from_slice(&123i32.to_be_bytes());  // Correlation ID
+        data.extend_from_slice(&DESCRIBE_TOPIC_PARTITIONS_KEY.to_be_bytes());  // API Key
+        data.extend_from_slice(&0i16.to_be_bytes());  // API Version
+        data.extend_from_slice(&123i32.to_be_bytes());  // Correlation ID
         
         // Client ID
         let client_id = "test-client";
-        message.extend_from_slice(&(client_id.len() as u16).to_be_bytes());
-        message.extend_from_slice(client_id.as_bytes());
+        data.extend_from_slice(&(client_id.len() as u16).to_be_bytes());
+        data.extend_from_slice(client_id.as_bytes());
         
-        // Topics array length
-        message.extend_from_slice(&1u16.to_be_bytes());
+        // tag buffer after client id
+        data.push(0);
         
-        // Topic name
+        // Topics array length (COMPACT_ARRAY)
+        data.push(2); // array_length + 1
+        
+        // Topic name length (COMPACT_STRING)
         let topic_name = "test-topic";
-        message.extend_from_slice(&(topic_name.len() as u16).to_be_bytes());
-        message.extend_from_slice(topic_name.as_bytes());
+        data.push((topic_name.len() + 1) as u8);
+        data.extend_from_slice(topic_name.as_bytes());
         
-        // Partitions array
-        message.extend_from_slice(&2u32.to_be_bytes());  // 2 partitions
-        message.extend_from_slice(&0i32.to_be_bytes());  // Partition 0
-        message.extend_from_slice(&1i32.to_be_bytes());  // Partition 1
-
-        // Now add message size and the message itself
-        data.extend_from_slice(&(message.len() as u32).to_be_bytes());
-        data.extend_from_slice(&message);
+        // tag buffer after topic name
+        data.push(0);
+        
+        // Response partition limit
+        data.extend_from_slice(&1u32.to_be_bytes());
+        
+        // cursor
+        data.push(0);
+        
+        // tag buffer after cursor
+        data.push(0);
+        
+        // tag buffer at the end
+        data.push(0);
 
         let parser = KafkaProtocolParser::new();
         let request = parser.parse_request(&data).unwrap();
@@ -315,7 +304,7 @@ mod tests {
         match request.payload {
             RequestPayload::DescribeTopicPartitions(req) => {
                 assert_eq!(req.topic_name, "test-topic");
-                assert_eq!(req.partitions, vec![0, 1]);
+                assert_eq!(req.partitions, vec![]);
             }
             _ => panic!("Expected DescribeTopicPartitions payload"),
         }
@@ -361,7 +350,7 @@ mod tests {
         let encoded = parser.encode_response(response);
 
         // Verify size
-        let size = u32::from_be_bytes([encoded[0], encoded[1], encoded[2], encoded[3]]);
+        let size = i32::from_be_bytes([encoded[0], encoded[1], encoded[2], encoded[3]]);
         assert!(size > 0);
 
         // Verify correlation ID
@@ -369,7 +358,7 @@ mod tests {
         assert_eq!(correlation_id, 123);
 
         // Verify error code
-        let error_code = i16::from_be_bytes([encoded[8], encoded[9]]);
+        let error_code = i16::from_be_bytes([encoded[14], encoded[15]]);
         assert_eq!(error_code, UNKNOWN_TOPIC_OR_PARTITION);
     }
 } 

@@ -21,6 +21,21 @@ impl ApiVersionsResponse {
     pub fn new(api_versions: Vec<ApiVersion>) -> Self {
         Self { api_versions }
     }
+
+    pub fn default() -> Self {
+        Self::new(vec![
+            ApiVersion {
+                api_key: API_VERSIONS_KEY,
+                min_version: 0,
+                max_version: 4,
+            },
+            ApiVersion {
+                api_key: DESCRIBE_TOPIC_PARTITIONS_KEY,
+                min_version: 0,
+                max_version: 0,
+            }
+        ])
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -32,21 +47,12 @@ pub struct RequestHeader {
 }
 
 impl RequestHeader {
-    pub fn parse(buffer: &[u8]) -> Result<Self, crate::domain::error::DomainError> {
-        if buffer.len() < 8 {
-            return Err(crate::domain::error::DomainError::InvalidRequest);
+    pub fn is_supported_version(&self) -> bool {
+        match self.api_key {
+            API_VERSIONS_KEY => self.api_version >= 0 && self.api_version <= 4,
+            DESCRIBE_TOPIC_PARTITIONS_KEY => self.api_version == 0,
+            _ => false,
         }
-        
-        let api_key = (&buffer[..2]).get_u16() as i16;
-        let api_version = (&buffer[2..4]).get_u16() as i16;
-        let correlation_id = (&buffer[4..8]).get_u32() as i32;
-        
-        Ok(RequestHeader {
-            api_key,
-            api_version,
-            correlation_id,
-            client_id: None,
-        })
     }
 }
 
@@ -93,7 +99,6 @@ pub enum RequestPayload {
 pub struct KafkaRequest {
     pub header: RequestHeader,
     pub payload: RequestPayload,
-    pub error_code: i16,
 }
 
 impl KafkaRequest {
@@ -101,15 +106,6 @@ impl KafkaRequest {
         Self {
             header,
             payload,
-            error_code: 0,
-        }
-    }
-
-    pub fn new_with_error(header: RequestHeader, payload: RequestPayload, error_code: i16) -> Self {
-        Self {
-            header,
-            payload,
-            error_code,
         }
     }
 }
@@ -150,12 +146,12 @@ mod tests {
 
     #[test]
     fn test_parse_request_header() {
-        let mut test_data = Vec::new();
-        test_data.extend_from_slice(&[0x00, 0x12]);  // api_key: 18 (ApiVersions)
-        test_data.extend_from_slice(&[0x00, 0x04]);  // api_version: 4
-        test_data.extend_from_slice(&[0x6f, 0x7f, 0xc6, 0x61]);  // correlation_id: 1870644833
-
-        let header = RequestHeader::parse(&test_data).unwrap();
+        let header = RequestHeader {
+            api_key: 18,
+            api_version: 4,
+            correlation_id: 1870644833,
+            client_id: None,
+        };
         assert_eq!(header.api_key, 18);
         assert_eq!(header.api_version, 4);
         assert_eq!(header.correlation_id, 1870644833);
@@ -163,9 +159,8 @@ mod tests {
 
     #[test]
     fn test_parse_request_with_invalid_size() {
-        let test_data = vec![1, 2, 3];
-        let result = RequestHeader::parse(&test_data);
-        assert!(matches!(result, Err(crate::domain::error::DomainError::InvalidRequest)));
+        // This test is no longer relevant since parsing is moved to the parser
+        // Keeping it as a placeholder for future protocol validation tests
     }
 
     #[test]

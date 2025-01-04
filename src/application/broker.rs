@@ -20,33 +20,17 @@ impl KafkaBroker {
     pub fn new(message_store: Box<dyn MessageStore>) -> Self {
         Self { message_store }
     }
-
-    fn create_api_versions_response(&self) -> ApiVersionsResponse {
-        let api_versions = vec![
-            ApiVersion {
-                api_key: API_VERSIONS_KEY,
-                min_version: 0,
-                max_version: MAX_SUPPORTED_VERSION,
-            },
-            ApiVersion {
-                api_key: DESCRIBE_TOPIC_PARTITIONS_KEY,
-                min_version: DESCRIBE_TOPIC_PARTITIONS_MIN_VERSION,
-                max_version: DESCRIBE_TOPIC_PARTITIONS_MAX_VERSION,
-            }
-        ];
-        ApiVersionsResponse::new(api_versions)
-    }
 }
 
 #[async_trait]
 impl MessageHandler for KafkaBroker {
     async fn handle_request(&self, request: KafkaRequest) -> Result<KafkaResponse> {
         // 버전 검증
-        if let Some(error_code) = validate_version(&request) {
+        if !request.header.is_supported_version() {
             return Ok(KafkaResponse::new(
                 request.header.correlation_id,
-                error_code,
-                ResponsePayload::ApiVersions(self.create_api_versions_response()),
+                UNSUPPORTED_VERSION,
+                ResponsePayload::ApiVersions(ApiVersionsResponse::default()),
             ));
         }
 
@@ -56,7 +40,7 @@ impl MessageHandler for KafkaBroker {
                 Ok(KafkaResponse::new(
                     request.header.correlation_id,
                     0,
-                    ResponsePayload::ApiVersions(self.create_api_versions_response()),
+                    ResponsePayload::ApiVersions(ApiVersionsResponse::default()),
                 ))
             }
             DESCRIBE_TOPIC_PARTITIONS_KEY => {
@@ -81,23 +65,3 @@ impl MessageHandler for KafkaBroker {
         }
     }
 }
-
-fn validate_version(request: &KafkaRequest) -> Option<i16> {
-    match request.header.api_key {
-        API_VERSIONS_KEY => {
-            if request.header.api_version >= 0 && request.header.api_version <= 4 {
-                None
-            } else {
-                Some(UNSUPPORTED_VERSION)
-            }
-        }
-        DESCRIBE_TOPIC_PARTITIONS_KEY => {
-            if request.header.api_version == 0 {
-                None
-            } else {
-                Some(UNSUPPORTED_VERSION)
-            }
-        }
-        _ => Some(UNSUPPORTED_VERSION)
-    }
-} 
