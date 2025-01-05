@@ -171,7 +171,7 @@ impl ProtocolParser for KafkaProtocolParser {
                 buf.put_i32(0); // throttle time ms
                 
                 // topics array length (COMPACT_ARRAY)
-                buf.put_i8(2);  // array_length + 1
+                buf.put_i8(2);  // array_length + 1 (1개의 토픽이므로 2)
                 
                 // topic error code
                 buf.put_i16(describe_response.error_code);
@@ -196,16 +196,19 @@ impl ProtocolParser for KafkaProtocolParser {
                     println!("[RESPONSE] Encoding partition: {:?}", partition);
                     buf.put_i16(partition.error_code);  // partition error code
                     buf.put_i32(partition.partition_id);  // partition id
-                    buf.put_i32(0);  // leader id
+                    buf.put_i32(1);  // leader id (1로 고정)
+                    buf.put_i32(0);  // leader epoch
                     
-                    // replica nodes (empty array)
-                    buf.put_i32(0);  // array length
+                    // replica nodes array
+                    buf.put_i8(2);  // array length + 1 (1개의 replica이므로 2)
+                    buf.put_i32(1);  // replica node id (1로 고정)
                     
-                    // isr nodes (empty array)
-                    buf.put_i32(0);  // array length
+                    // isr nodes array
+                    buf.put_i8(2);  // array length + 1 (1개의 isr이므로 2)
+                    buf.put_i32(1);  // isr node id (1로 고정)
                     
-                    // offline replicas (empty array)
-                    buf.put_i32(0);  // array length
+                    // offline replicas array
+                    buf.put_i8(1);  // array length + 1 (0개이므로 1)
                     
                     buf.put_i8(0);  // TAG_BUFFER
                 }
@@ -213,9 +216,8 @@ impl ProtocolParser for KafkaProtocolParser {
                 // topic authorized operations
                 buf.put_u32(0x00000df8);
                 
-                // next_cursor (COMPACT_STRING)
-                buf.put_i8(1);  // empty string length + 1
-                // empty string for next_cursor
+                // next_cursor (nullable)
+                buf.put_u8(0xff);  // null value
                 
                 buf.put_i8(0);  // TAG_BUFFER
             }
