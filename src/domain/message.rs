@@ -1,7 +1,6 @@
 use crate::adapters::incoming::protocol::constants::{
-    API_VERSIONS_KEY, MAX_SUPPORTED_VERSION, UNSUPPORTED_VERSION,
-    DESCRIBE_TOPIC_PARTITIONS_KEY, DESCRIBE_TOPIC_PARTITIONS_MIN_VERSION,
-    DESCRIBE_TOPIC_PARTITIONS_MAX_VERSION
+    API_VERSIONS_KEY,
+    DESCRIBE_TOPIC_PARTITIONS_KEY,
 };
 use bytes::Buf;
 
@@ -201,7 +200,11 @@ impl Partition {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::adapters::incoming::protocol::constants::{API_VERSIONS_KEY, MAX_SUPPORTED_VERSION, UNSUPPORTED_VERSION};
+    use crate::adapters::incoming::protocol::constants::{
+        MAX_SUPPORTED_VERSION, UNSUPPORTED_VERSION,
+        DESCRIBE_TOPIC_PARTITIONS_MIN_VERSION,
+        DESCRIBE_TOPIC_PARTITIONS_MAX_VERSION
+    };
 
     #[test]
     fn test_parse_request_header() {

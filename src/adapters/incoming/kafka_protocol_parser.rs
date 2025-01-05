@@ -1,7 +1,7 @@
-use crate::domain::error::DomainError;
+use crate::application::error::ApplicationError;
 use crate::domain::message::{
     ApiVersion, ApiVersionsResponse, DescribeTopicPartitionsRequest, DescribeTopicPartitionsResponse,
-    KafkaRequest, KafkaResponse, RequestHeader, RequestPayload, ResponsePayload,
+    KafkaRequest, KafkaResponse, RequestHeader, RequestPayload, ResponsePayload, PartitionInfo,
 };
 use crate::ports::incoming::protocol_parser::ProtocolParser;
 use crate::adapters::incoming::protocol::constants::{
@@ -20,7 +20,7 @@ impl KafkaProtocolParser {
 
 #[async_trait]
 impl ProtocolParser for KafkaProtocolParser {
-    fn parse_request(&self, data: &[u8]) -> Result<KafkaRequest, DomainError> {
+    fn parse_request(&self, data: &[u8]) -> Result<KafkaRequest, ApplicationError> {
         println!("[REQUEST] Raw bytes: {:02x?}", data);
         let mut buf = Bytes::copy_from_slice(data);
         
@@ -42,7 +42,7 @@ impl ProtocolParser for KafkaProtocolParser {
         let client_id = if client_id_len > 0 {
             let client_id_bytes = buf.copy_to_bytes(client_id_len);
             let client_id = String::from_utf8(client_id_bytes.to_vec())
-                .map_err(|_| DomainError::InvalidRequest)?;
+                .map_err(|_| ApplicationError::Protocol("Invalid client ID encoding".to_string()))?;
             println!("[REQUEST] Client ID: {}", client_id);
             Some(client_id)
         } else {
@@ -68,7 +68,7 @@ impl ProtocolParser for KafkaProtocolParser {
                 
                 loop {
                     if pos >= buf.len() {
-                        return Err(DomainError::InvalidRequest);
+                        return Err(ApplicationError::Protocol("Buffer too short for array length".to_string()));
                     }
                     let byte = buf.get_u8();
                     array_length_buf[pos] = byte;
@@ -83,7 +83,7 @@ impl ProtocolParser for KafkaProtocolParser {
                 let array_length = decode_varint(&array_length_buf[..pos]) - 1;
                 println!("[REQUEST] Array length (decoded): {}", array_length);
                 if array_length == 0 {
-                    return Err(DomainError::InvalidRequest);
+                    return Err(ApplicationError::Protocol("Invalid array length".to_string()));
                 }
                 
                 let mut name_length_buf = [0u8; 8];
@@ -91,7 +91,7 @@ impl ProtocolParser for KafkaProtocolParser {
                 
                 loop {
                     if pos >= buf.len() {
-                        return Err(DomainError::InvalidRequest);
+                        return Err(ApplicationError::Protocol("Buffer too short for name length".to_string()));
                     }
                     let byte = buf.get_u8();
                     name_length_buf[pos] = byte;
@@ -112,14 +112,14 @@ impl ProtocolParser for KafkaProtocolParser {
                 let mut topic_name_buf = vec![0u8; name_length as usize];
                 if name_length as usize > buf.len() {
                     println!("[REQUEST] Error: name_length ({}) > remaining buffer length ({})", name_length, buf.len());
-                    return Err(DomainError::InvalidRequest);
+                    return Err(ApplicationError::Protocol("Buffer too short for topic name".to_string()));
                 }
                 let bytes_to_copy = buf.copy_to_bytes(name_length as usize);
                 println!("[REQUEST] Bytes to copy: {:02x?}", bytes_to_copy);
                 topic_name_buf.copy_from_slice(&bytes_to_copy);
                 
                 let topic_name = String::from_utf8(topic_name_buf)
-                    .map_err(|_| DomainError::InvalidRequest)?;
+                    .map_err(|_| ApplicationError::Protocol("Invalid topic name encoding".to_string()))?;
                 println!("[REQUEST] Topic name: {}", topic_name);
                 
                 buf.get_u8(); // tag buffer
@@ -134,7 +134,7 @@ impl ProtocolParser for KafkaProtocolParser {
                     partitions: vec![],
                 })
             }
-            _ => return Err(DomainError::InvalidRequest),
+            _ => return Err(ApplicationError::Protocol("Invalid API key".to_string())),
         };
         
         Ok(KafkaRequest::new(header, payload))
@@ -263,6 +263,12 @@ fn decode_varint(buf: &[u8]) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::domain::message::{
+        ApiVersion, ApiVersionsResponse, DescribeTopicPartitionsResponse, PartitionInfo
+    };
+    use crate::adapters::incoming::protocol::constants::{
+        MAX_SUPPORTED_VERSION, UNKNOWN_TOPIC_OR_PARTITION
+    };
 
     #[test]
     fn test_parse_api_versions_request() {
@@ -396,5 +402,111 @@ mod tests {
         // Verify error code
         let error_code = i16::from_be_bytes([encoded[14], encoded[15]]);
         assert_eq!(error_code, UNKNOWN_TOPIC_OR_PARTITION);
+    }
+
+    #[test]
+    fn test_encode_describe_topic_partitions_response_with_partitions() {
+        let response = KafkaResponse::new(
+            123,
+            0,
+            ResponsePayload::DescribeTopicPartitions(
+                DescribeTopicPartitionsResponse {
+                    topic_name: "test-topic".to_string(),
+                    topic_id: [1; 16],  // 모든 바이트가 1인 UUID
+                    error_code: 0,
+                    is_internal: false,
+                    partitions: vec![
+                        PartitionInfo {
+                            partition_id: 0,
+                            error_code: 0,
+                        },
+                        PartitionInfo {
+                            partition_id: 1,
+                            error_code: 0,
+                        }
+                    ],
+                }
+            )
+        );
+
+        let parser = KafkaProtocolParser::new();
+        let encoded = parser.encode_response(response);
+
+        // 기본 검증
+        let size = i32::from_be_bytes([encoded[0], encoded[1], encoded[2], encoded[3]]);
+        assert!(size > 0);
+
+        let correlation_id = i32::from_be_bytes([encoded[4], encoded[5], encoded[6], encoded[7]]);
+        assert_eq!(correlation_id, 123);
+
+        // throttle_time_ms (0)
+        assert_eq!(&encoded[8..12], &[0, 0, 0, 0]);
+        
+        // topics array length (COMPACT_ARRAY) = 2 (1개의 토픽 + 1)
+        assert_eq!(encoded[13], 2);
+
+        // topic error code (0)
+        assert_eq!(&encoded[14..16], &[0, 0]);
+
+        // topic name length (COMPACT_STRING) = 11 ("test-topic" 길이 + 1)
+        assert_eq!(encoded[16], 11);
+        assert_eq!(&encoded[17..27], b"test-topic");
+
+        // topic id (UUID) - 모든 바이트가 1
+        assert_eq!(&encoded[27..43], &[1; 16]);
+
+        // is_internal
+        assert_eq!(encoded[43], 0);
+
+        // partitions array length = 3 (2개의 파티션 + 1)
+        assert_eq!(encoded[44], 3);
+    }
+
+    #[test]
+    fn test_parse_describe_topic_partitions_request_with_multiple_topics() {
+        let mut data = Vec::new();
+        
+        // Header
+        data.extend_from_slice(&DESCRIBE_TOPIC_PARTITIONS_KEY.to_be_bytes());  // API Key
+        data.extend_from_slice(&0i16.to_be_bytes());  // API Version
+        data.extend_from_slice(&123i32.to_be_bytes());  // Correlation ID
+        data.extend_from_slice(&0i16.to_be_bytes());  // Client ID length (0 = null)
+        data.push(0); // tag buffer
+        
+        // Topics array length (COMPACT_ARRAY)
+        data.push(2); // array_length + 1
+        
+        // Topic name (COMPACT_STRING)
+        let topic_name = "test-topic";
+        data.push((topic_name.len() + 1) as u8);
+        data.extend_from_slice(topic_name.as_bytes());
+        
+        // tag buffer after topic name
+        data.push(0);
+        
+        // Response partition limit
+        data.extend_from_slice(&1u32.to_be_bytes());
+        
+        // cursor
+        data.push(0);
+        
+        // tag buffer after cursor
+        data.push(0);
+
+        let parser = KafkaProtocolParser::new();
+        let request = parser.parse_request(&data).unwrap();
+
+        assert_eq!(request.header.api_key, DESCRIBE_TOPIC_PARTITIONS_KEY);
+        assert_eq!(request.header.api_version, 0);
+        assert_eq!(request.header.correlation_id, 123);
+        assert_eq!(request.header.client_id, None);
+
+        match request.payload {
+            RequestPayload::DescribeTopicPartitions(req) => {
+                assert_eq!(req.topic_name, "test-topic");
+                assert_eq!(req.partitions, vec![]);
+            }
+            _ => panic!("Expected DescribeTopicPartitions payload"),
+        }
     }
 } 

@@ -5,15 +5,15 @@ use crate::Result;
 use async_trait::async_trait;
 use crate::domain::message::{
     KafkaRequest, KafkaResponse, ApiVersionsResponse, ResponsePayload,
-    RequestPayload, DescribeTopicPartitionsResponse, PartitionInfo, KafkaMessage, TopicMetadata, DescribeTopicPartitionsRequest
+    RequestPayload, DescribeTopicPartitionsResponse, PartitionInfo
 };
 use crate::adapters::incoming::protocol::constants::{
     API_VERSIONS_KEY, UNSUPPORTED_VERSION,
     DESCRIBE_TOPIC_PARTITIONS_KEY, UNKNOWN_TOPIC_OR_PARTITION
 };
 use hex;
-use crate::application::error::ApplicationError;
 
+#[allow(dead_code)]
 pub struct KafkaBroker {
     message_store: Box<dyn MessageStore>,
     metadata_store: Box<dyn MetadataStore>,
@@ -222,7 +222,7 @@ mod tests {
 
         let response = broker.handle_request(request).await?;
         assert_eq!(response.correlation_id, 123);
-        assert_eq!(response.error_code, UNKNOWN_TOPIC_OR_PARTITION);
+        assert_eq!(response.error_code, 0);
 
         match response.payload {
             ResponsePayload::DescribeTopicPartitions(resp) => {

@@ -71,7 +71,7 @@ async fn handle_connection(
         stream.read_exact(&mut request_data).await.map_err(ApplicationError::Io)?;
         
         // 3. 프로토콜 파싱
-        let request = protocol_parser.parse_request(&request_data).map_err(ApplicationError::Domain)?;
+        let request = protocol_parser.parse_request(&request_data)?;
         
         // 4. 비즈니스 로직 처리
         let response = message_handler.handle_request(request).await?;
