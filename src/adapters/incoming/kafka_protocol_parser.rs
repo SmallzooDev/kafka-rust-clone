@@ -167,8 +167,10 @@ impl ProtocolParser for KafkaProtocolParser {
             }
             ResponsePayload::DescribeTopicPartitions(describe_response) => {
                 println!("[RESPONSE] Encoding DescribeTopicPartitions response: {:?}", describe_response);
+                
+                // throttle time ms
+                buf.put_i32(0);
                 buf.put_i8(0); // TAG_BUFFER
-                buf.put_i32(0); // throttle time ms
                 
                 // topics array length (COMPACT_ARRAY)
                 buf.put_i8(2);  // array_length + 1 (1개의 토픽이므로 2)
@@ -194,8 +196,8 @@ impl ProtocolParser for KafkaProtocolParser {
                 // Write each partition
                 for partition in &describe_response.partitions {
                     println!("[RESPONSE] Encoding partition: {:?}", partition);
-                    buf.put_i16(partition.error_code);  // partition error code
                     buf.put_i32(partition.partition_id);  // partition id
+                    buf.put_i16(partition.error_code);  // partition error code
                     buf.put_i32(1);  // leader id (1로 고정)
                     buf.put_i32(0);  // leader epoch
                     
@@ -207,19 +209,27 @@ impl ProtocolParser for KafkaProtocolParser {
                     buf.put_i8(2);  // array length + 1 (1개의 isr이므로 2)
                     buf.put_i32(1);  // isr node id (1로 고정)
                     
+                    // eligible leader replicas array
+                    buf.put_i8(1);  // array length + 1 (0개이므로 1)
+                    
+                    // last known eligible leader replicas array
+                    buf.put_i8(1);  // array length + 1 (0개이므로 1)
+                    
                     // offline replicas array
                     buf.put_i8(1);  // array length + 1 (0개이므로 1)
                     
-                    buf.put_i8(0);  // TAG_BUFFER
+                    buf.put_i8(0);  // TAG_BUFFER for partition
                 }
                 
                 // topic authorized operations
                 buf.put_u32(0x00000df8);
                 
-                // next_cursor (nullable)
-                buf.put_u8(0xff);  // null value
+                buf.put_i8(0);  // TAG_BUFFER for topic
                 
-                buf.put_i8(0);  // TAG_BUFFER
+                // next_cursor (nullable)
+                buf.put_u8(0xff);  // null
+                
+                buf.put_i8(0);  // TAG_BUFFER for entire response
             }
         }
         

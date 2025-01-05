@@ -12,6 +12,7 @@ use crate::adapters::incoming::protocol::constants::{
     DESCRIBE_TOPIC_PARTITIONS_KEY, UNKNOWN_TOPIC_OR_PARTITION
 };
 use hex;
+use crate::application::error::ApplicationError;
 
 pub struct KafkaBroker {
     message_store: Box<dyn MessageStore>,
@@ -76,7 +77,7 @@ impl MessageHandler for KafkaBroker {
                                         DescribeTopicPartitionsResponse {
                                             topic_name: req.topic_name.clone(),
                                             topic_id,
-                                            error_code: 0,
+                                            error_code: metadata.error_code as i16,
                                             is_internal: false,
                                             partitions,
                                         }
@@ -87,9 +88,15 @@ impl MessageHandler for KafkaBroker {
                                 // 토픽이 존재하지 않는 경우
                                 Ok(KafkaResponse::new(
                                     request.header.correlation_id,
-                                    UNKNOWN_TOPIC_OR_PARTITION,
+                                    0,
                                     ResponsePayload::DescribeTopicPartitions(
-                                        DescribeTopicPartitionsResponse::new_unknown_topic(req.topic_name.clone())
+                                        DescribeTopicPartitionsResponse {
+                                            topic_name: req.topic_name.clone(),
+                                            topic_id: [0; 16],
+                                            error_code: UNKNOWN_TOPIC_OR_PARTITION,
+                                            is_internal: false,
+                                            partitions: vec![],
+                                        }
                                     ),
                                 ))
                             }

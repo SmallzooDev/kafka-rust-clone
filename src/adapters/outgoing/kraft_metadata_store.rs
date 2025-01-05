@@ -20,7 +20,6 @@ impl KraftMetadataStore {
 
     fn get_metadata_log_path(&self) -> PathBuf {
         let path = self.log_dir.join("__cluster_metadata-0").join("00000000000000000000.log");
-        println!("[METADATA] Looking for metadata file at: {:?}", path);
         path
     }
 }
@@ -31,11 +30,9 @@ impl MetadataStore for KraftMetadataStore {
     async fn get_topic_metadata(&self, requested_topics: Vec<String>) -> Result<Option<TopicMetadata>, ApplicationError> {
         let path = self.get_metadata_log_path();
         let content = read(&path).await.map_err(ApplicationError::Io)?;
-        println!("[METADATA] File content size: {}", content.len());
         let mut data = BytesMut::with_capacity(content.len());
         data.extend_from_slice(&content);
         let mut data = data.freeze();
-        println!("[METADATA] Raw bytes before parsing: {:02X?}", data);
 
         let mut topics = Vec::new();
         let mut topic_id =  "00000000-0000-0000-0000-000000000000".to_string();
@@ -43,9 +40,7 @@ impl MetadataStore for KraftMetadataStore {
         let topic_authorized_operations = 0x0DF;
 
         while data.remaining() > 0 {
-            println!("[METADATA] Remaining bytes before parsing record batch: {}", data.remaining());
             let record_batch = RecordBatch::from_bytes(&mut data);
-            println!("[METADATA] Processing record batch with {} records", record_batch.records.len());
 
             for topic_name in &requested_topics {
                 topic_id =  "00000000-0000-0000-0000-000000000000".to_string();
@@ -54,10 +49,8 @@ impl MetadataStore for KraftMetadataStore {
                 // find topic id and partition info in the records
                 for rec in &record_batch.records {
                     let record_type = &rec.value;
-                    println!("[METADATA] Processing record: {:?}", record_type);
                     if let Some(id) = match record_type {
                         RecordValue::Topic(ref topic) if topic.topic_name == *topic_name => {
-                            println!("[METADATA] Found topic: {} with id: {}", topic.topic_name, topic.topic_id);
                             Some(topic.topic_id.clone())
                         }
                         _ => None,
@@ -68,7 +61,6 @@ impl MetadataStore for KraftMetadataStore {
 
                     match record_type {
                         RecordPartition(p) if p.topic_id == topic_id => {
-                            println!("[METADATA] Found partition: {:?}", p);
                             partitions.push(Partition::new(
                                 ErrorCode::None,
                                 p.partition_id,
@@ -86,7 +78,6 @@ impl MetadataStore for KraftMetadataStore {
                 }
 
                 if !partitions.is_empty() {
-                    println!("[METADATA] Creating topic metadata for {} with {} partitions", topic_name, partitions.len());
                     let topic = TopicMetadata {
                         error_code: topic_error_code,
                         name: topic_name.to_string(),
@@ -99,8 +90,6 @@ impl MetadataStore for KraftMetadataStore {
                 }
             }
         }
-
-        println!("[METADATA] Found {} topics", topics.len());
 
         for requested_topic in &requested_topics {
             let mut topic_found = false;
@@ -122,8 +111,6 @@ impl MetadataStore for KraftMetadataStore {
             }
         }
 
-        println!("[METADATA] Raw bytes: {:02X?}", content);
-        
         if topics.is_empty() {
             Ok(None)
         } else {
@@ -427,11 +414,8 @@ pub struct RecordBatch {
 
 impl RecordBatch {
     pub fn from_bytes(src: &mut Bytes) -> Self {
-        println!("[METADATA] Parsing record batch, remaining bytes: {}", src.remaining());
         let base_offset = src.get_i64();
-        println!("[METADATA] base_offset: {}", base_offset);
         let batch_length = src.get_i32();
-        println!("[METADATA] batch_length: {}", batch_length);
         let partition_leader_epoch = src.get_i32();
         let magic = src.get_i8();
         let crc = src.get_u32();
@@ -442,9 +426,7 @@ impl RecordBatch {
         let producer_id = src.get_i64();
         let producer_epoch = src.get_i16();
         let base_sequence = src.get_i32();
-        println!("[METADATA] Before parsing records, remaining bytes: {}", src.remaining());
         let records = NullableBytes::deserialize::<Record, RecordBatch>(src);
-        println!("[METADATA] Parsed {} records", records.len());
 
         Self {
             base_offset,
@@ -510,19 +492,14 @@ impl NullableBytes {
     }
 
     pub fn deserialize<T, U: Deserialize<T>>(src: &mut Bytes) -> Vec<T> {
-        println!("[METADATA] Deserializing nullable bytes, remaining: {}", src.remaining());
         let len = src.get_i32();
-        println!("[METADATA] Length field: {}", len);
         let items_len = if len == -1 { 0 } else { len as usize };
-        println!("[METADATA] Items length: {}", items_len);
 
         let mut items = Vec::with_capacity(items_len);
         for i in 0..items_len {
-            println!("[METADATA] Deserializing item {}/{}", i+1, items_len);
             let item = U::deserialize(src);
             items.push(item);
         }
-        println!("[METADATA] Deserialized {} items", items.len());
         items
     }
 }
