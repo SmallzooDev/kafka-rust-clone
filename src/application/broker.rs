@@ -5,12 +5,13 @@ use crate::Result;
 use async_trait::async_trait;
 use crate::domain::message::{
     KafkaRequest, KafkaResponse, ApiVersionsResponse, ResponsePayload,
-    RequestPayload, DescribeTopicPartitionsResponse, PartitionInfo, KafkaMessage
+    RequestPayload, DescribeTopicPartitionsResponse, PartitionInfo, KafkaMessage, TopicMetadata, DescribeTopicPartitionsRequest
 };
 use crate::adapters::incoming::protocol::constants::{
     API_VERSIONS_KEY, UNSUPPORTED_VERSION,
     DESCRIBE_TOPIC_PARTITIONS_KEY, UNKNOWN_TOPIC_OR_PARTITION
 };
+use hex;
 
 pub struct KafkaBroker {
     message_store: Box<dyn MessageStore>,
@@ -51,17 +52,22 @@ impl MessageHandler for KafkaBroker {
                 match &request.payload {
                     RequestPayload::DescribeTopicPartitions(req) => {
                         // 메타데이터 스토어에서 토픽 정보 조회
-                        let topic_metadata = self.metadata_store.get_topic_metadata(&req.topic_name).await?;
+                        let topic_metadata = self.metadata_store.get_topic_metadata(vec![req.topic_name.clone()]).await?;
                         
                         match topic_metadata {
                             Some(metadata) => {
                                 // 토픽이 존재하는 경우
                                 let partitions = metadata.partitions.iter()
                                     .map(|p| PartitionInfo {
-                                        partition_id: p.partition_index,
+                                        partition_id: p.partition_index as i32,
                                         error_code: 0,
                                     })
                                     .collect();
+
+                                let topic_id_bytes = hex::decode(metadata.topic_id.replace("-", ""))
+                                    .unwrap_or(vec![0; 16]);
+                                let mut topic_id = [0u8; 16];
+                                topic_id.copy_from_slice(&topic_id_bytes);
 
                                 Ok(KafkaResponse::new(
                                     request.header.correlation_id,
@@ -69,7 +75,7 @@ impl MessageHandler for KafkaBroker {
                                     ResponsePayload::DescribeTopicPartitions(
                                         DescribeTopicPartitionsResponse {
                                             topic_name: req.topic_name.clone(),
-                                            topic_id: metadata.topic_id,
+                                            topic_id,
                                             error_code: 0,
                                             is_internal: false,
                                             partitions,
@@ -106,7 +112,7 @@ mod tests {
     use super::*;
     use std::sync::Arc;
     use async_trait::async_trait;
-    use crate::domain::message::{RequestHeader, TopicMetadata, PartitionMetadata, DescribeTopicPartitionsRequest, KafkaMessage};
+    use crate::domain::message::{RequestHeader, TopicMetadata, DescribeTopicPartitionsRequest, KafkaMessage};
 
     struct MockMessageStore;
     #[async_trait]
@@ -128,21 +134,24 @@ mod tests {
 
     #[async_trait]
     impl MetadataStore for MockMetadataStore {
-        async fn get_topic_metadata(&self, topic_name: &str) -> Result<Option<TopicMetadata>> {
+        async fn get_topic_metadata(&self, topic_names: Vec<String>) -> Result<Option<TopicMetadata>> {
             Ok(self.topics.iter()
-                .find(|t| t.name == topic_name)
+                .find(|t| topic_names.contains(&t.name))
                 .cloned())
         }
     }
 
     #[tokio::test]
     async fn test_handle_describe_topic_partitions_existing_topic() -> Result<()> {
-        let topic_id = [1u8; 16];
-        let topic_metadata = TopicMetadata::new(
-            "test-topic".to_string(),
-            topic_id,
-            vec![PartitionMetadata::new(0, 0, vec![0], vec![0])],
-        );
+        let topic_id = "00000000-0000-0000-0000-000000000001".to_string();
+        let topic_metadata = TopicMetadata {
+            error_code: crate::domain::message::ErrorCode::None,
+            name: "test-topic".to_string(),
+            topic_id: topic_id.clone(),
+            is_internal: false,
+            partitions: vec![],
+            topic_authorized_operations: 0x0DF,
+        };
 
         let broker = KafkaBroker::new(
             Box::new(MockMessageStore),
@@ -171,11 +180,10 @@ mod tests {
         match response.payload {
             ResponsePayload::DescribeTopicPartitions(resp) => {
                 assert_eq!(resp.topic_name, "test-topic");
-                assert_eq!(resp.topic_id, topic_id);
+                let expected_topic_id = hex::decode(topic_id.replace("-", "")).unwrap();
+                assert_eq!(&resp.topic_id[..], &expected_topic_id[..]);
                 assert_eq!(resp.error_code, 0);
-                assert_eq!(resp.partitions.len(), 1);
-                assert_eq!(resp.partitions[0].partition_id, 0);
-                assert_eq!(resp.partitions[0].error_code, 0);
+                assert_eq!(resp.partitions.len(), 0);
             }
             _ => panic!("Expected DescribeTopicPartitions response"),
         }

@@ -105,12 +105,18 @@ impl ProtocolParser for KafkaProtocolParser {
                 
                 let name_length = decode_varint(&name_length_buf[..pos]) - 1;
                 println!("[REQUEST] Name length (decoded): {}", name_length);
+                println!("[REQUEST] Before topic name parsing, remaining buffer: {:02x?}", buf);
+                println!("[REQUEST] Buffer length: {}", buf.len());
+                println!("[REQUEST] Buffer contents: {:?}", buf.chunk());
                 
                 let mut topic_name_buf = vec![0u8; name_length as usize];
                 if name_length as usize > buf.len() {
+                    println!("[REQUEST] Error: name_length ({}) > remaining buffer length ({})", name_length, buf.len());
                     return Err(DomainError::InvalidRequest);
                 }
-                topic_name_buf.copy_from_slice(&buf.copy_to_bytes(name_length as usize));
+                let bytes_to_copy = buf.copy_to_bytes(name_length as usize);
+                println!("[REQUEST] Bytes to copy: {:02x?}", bytes_to_copy);
+                topic_name_buf.copy_from_slice(&bytes_to_copy);
                 
                 let topic_name = String::from_utf8(topic_name_buf)
                     .map_err(|_| DomainError::InvalidRequest)?;
@@ -160,6 +166,7 @@ impl ProtocolParser for KafkaProtocolParser {
                 buf.put_i8(0); // TAG_BUFFER
             }
             ResponsePayload::DescribeTopicPartitions(describe_response) => {
+                println!("[RESPONSE] Encoding DescribeTopicPartitions response: {:?}", describe_response);
                 buf.put_i8(0); // TAG_BUFFER
                 buf.put_i32(0); // throttle time ms
                 
@@ -182,21 +189,23 @@ impl ProtocolParser for KafkaProtocolParser {
                 
                 // partitions array (COMPACT_ARRAY)
                 buf.put_i8((describe_response.partitions.len() + 1) as i8);
+                println!("[RESPONSE] Encoding {} partitions", describe_response.partitions.len());
                 
                 // Write each partition
                 for partition in &describe_response.partitions {
+                    println!("[RESPONSE] Encoding partition: {:?}", partition);
                     buf.put_i16(partition.error_code);  // partition error code
                     buf.put_i32(partition.partition_id);  // partition id
                     buf.put_i32(0);  // leader id
                     
                     // replica nodes (empty array)
-                    buf.put_i8(1);  // array length + 1
+                    buf.put_i32(0);  // array length
                     
                     // isr nodes (empty array)
-                    buf.put_i8(1);  // array length + 1
+                    buf.put_i32(0);  // array length
                     
                     // offline replicas (empty array)
-                    buf.put_i8(1);  // array length + 1
+                    buf.put_i32(0);  // array length
                     
                     buf.put_i8(0);  // TAG_BUFFER
                 }
@@ -204,14 +213,11 @@ impl ProtocolParser for KafkaProtocolParser {
                 // topic authorized operations
                 buf.put_u32(0x00000df8);
                 
-                // TAG_BUFFER
-                buf.put_i8(0);
+                // next_cursor (COMPACT_STRING)
+                buf.put_i8(1);  // empty string length + 1
+                // empty string for next_cursor
                 
-                // next cursor
-                buf.put_u8(0xff);
-                
-                // final TAG_BUFFER
-                buf.put_i8(0);
+                buf.put_i8(0);  // TAG_BUFFER
             }
         }
         

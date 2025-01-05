@@ -12,6 +12,7 @@ tokio = { version = "1.23.0", features = ["full"] }
 async-trait = "0.1.73"
 uuid = { version = "1.6.1", features = ["v4"] }
 tempfile = "3.10.0"
+hex = "0.4.3"
 
 [lib]
 name = "kafka_starter"

@@ -139,38 +139,61 @@ pub struct KafkaMessage {
     pub payload: Vec<u8>,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq)]
+#[repr(i16)]
+pub enum ErrorCode {
+    None = 0,
+    UnknownTopicOrPartition = 3,
+    UnsupportedVersion = 35,
+    InvalidRequest = 42,
+    UnknownTopicId = 100,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct TopicMetadata {
-    pub name: String,
-    pub topic_id: [u8; 16],  // UUID as 16 bytes
-    pub partitions: Vec<PartitionMetadata>,
+    pub error_code: ErrorCode,
+    pub name: String,     // COMPACT_NULLABLE_STRING
+    pub topic_id: String, // UUID
+    pub is_internal: bool,
+    pub partitions: Vec<Partition>,
+    pub topic_authorized_operations: i32, // A 4-byte integer (bitfield) representing the authorized operations for this topic.
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub struct PartitionMetadata {
-    pub partition_index: i32,
-    pub leader_id: i32,
-    pub replica_nodes: Vec<i32>,
-    pub isr_nodes: Vec<i32>,  // in-sync replicas
+pub struct Partition {
+    pub error_code: ErrorCode,
+    pub partition_index: u32,
+    pub leader_id: u32,
+    pub leader_epoch: u32,
+    pub replicas: Vec<u32>,
+    pub in_sync_replicas: Vec<u32>,
+    pub eligible_leader_replicas: Vec<u32>,
+    pub last_known_eligible_leader_replicas: Vec<u32>,
+    pub off_line_replicas: Vec<u32>,
 }
 
-impl TopicMetadata {
-    pub fn new(name: String, topic_id: [u8; 16], partitions: Vec<PartitionMetadata>) -> Self {
+impl Partition {
+    pub fn new(
+        error_code: ErrorCode,
+        partition_index: u32,
+        leader_id: u32,
+        leader_epoch: u32,
+        replicas: Vec<u32>,
+        in_sync_replicas: Vec<u32>,
+        eligible_leader_replicas: Vec<u32>,
+        last_known_eligible_leader_replicas: Vec<u32>,
+        off_line_replicas: Vec<u32>,
+    ) -> Self {
         Self {
-            name,
-            topic_id,
-            partitions,
-        }
-    }
-}
-
-impl PartitionMetadata {
-    pub fn new(partition_index: i32, leader_id: i32, replica_nodes: Vec<i32>, isr_nodes: Vec<i32>) -> Self {
-        Self {
+            error_code,
             partition_index,
             leader_id,
-            replica_nodes,
-            isr_nodes,
+            leader_epoch,
+            replicas,
+            in_sync_replicas,
+            eligible_leader_replicas,
+            last_known_eligible_leader_replicas,
+            off_line_replicas,
         }
     }
 }

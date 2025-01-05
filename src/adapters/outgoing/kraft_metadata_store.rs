@@ -4,7 +4,10 @@ use crate::ports::outgoing::metadata_store::MetadataStore;
 use async_trait::async_trait;
 use std::io::Read;
 use std::path::PathBuf;
+use bytes::{Buf, BytesMut, Bytes, BufMut};
 use tokio::fs::read;
+use crate::domain::message::{ErrorCode, Partition};
+use crate::adapters::outgoing::kraft_metadata_store::RecordValue::Partition as RecordPartition;
 
 pub struct KraftMetadataStore {
     log_dir: PathBuf,
@@ -22,9 +25,526 @@ impl KraftMetadataStore {
     }
 }
 
+
+#[async_trait]
+impl MetadataStore for KraftMetadataStore {
+    async fn get_topic_metadata(&self, requested_topics: Vec<String>) -> Result<Option<TopicMetadata>, ApplicationError> {
+        let path = self.get_metadata_log_path();
+        let content = read(&path).await.map_err(ApplicationError::Io)?;
+        println!("[METADATA] File content size: {}", content.len());
+        let mut data = BytesMut::with_capacity(content.len());
+        data.extend_from_slice(&content);
+        let mut data = data.freeze();
+        println!("[METADATA] Raw bytes before parsing: {:02X?}", data);
+
+        let mut topics = Vec::new();
+        let mut topic_id =  "00000000-0000-0000-0000-000000000000".to_string();
+        let mut topic_error_code = ErrorCode::UnknownTopicOrPartition;
+        let topic_authorized_operations = 0x0DF;
+
+        while data.remaining() > 0 {
+            println!("[METADATA] Remaining bytes before parsing record batch: {}", data.remaining());
+            let record_batch = RecordBatch::from_bytes(&mut data);
+            println!("[METADATA] Processing record batch with {} records", record_batch.records.len());
+
+            for topic_name in &requested_topics {
+                topic_id =  "00000000-0000-0000-0000-000000000000".to_string();
+                let mut partitions = Vec::new();
+
+                // find topic id and partition info in the records
+                for rec in &record_batch.records {
+                    let record_type = &rec.value;
+                    println!("[METADATA] Processing record: {:?}", record_type);
+                    if let Some(id) = match record_type {
+                        RecordValue::Topic(ref topic) if topic.topic_name == *topic_name => {
+                            println!("[METADATA] Found topic: {} with id: {}", topic.topic_name, topic.topic_id);
+                            Some(topic.topic_id.clone())
+                        }
+                        _ => None,
+                    } {
+                        topic_id = id;
+                        topic_error_code = ErrorCode::None;
+                    };
+
+                    match record_type {
+                        RecordPartition(p) if p.topic_id == topic_id => {
+                            println!("[METADATA] Found partition: {:?}", p);
+                            partitions.push(Partition::new(
+                                ErrorCode::None,
+                                p.partition_id,
+                                p.leader_id,
+                                p.leader_epoch,
+                                p.replicas.clone(),
+                                p.in_sync_replicas.clone(),
+                                p.adding_replicas.clone(),
+                                Vec::new(),
+                                p.removing_replicas.clone(),
+                            ));
+                        }
+                        _ => {}
+                    }
+                }
+
+                if !partitions.is_empty() {
+                    println!("[METADATA] Creating topic metadata for {} with {} partitions", topic_name, partitions.len());
+                    let topic = TopicMetadata {
+                        error_code: topic_error_code,
+                        name: topic_name.to_string(),
+                        topic_id: topic_id.clone(),
+                        is_internal: false,
+                        partitions,
+                        topic_authorized_operations,
+                    };
+                    topics.push(topic);
+                }
+            }
+        }
+
+        println!("[METADATA] Found {} topics", topics.len());
+
+        for requested_topic in &requested_topics {
+            let mut topic_found = false;
+            for topic in &topics {
+                if topic.name == *requested_topic {
+                    topic_found = true;
+                }
+            }
+            if !topic_found {
+                let error_topic = TopicMetadata {
+                    error_code: ErrorCode::UnknownTopicOrPartition,
+                    name: requested_topic.to_string(),
+                    topic_id: topic_id.clone(),
+                    is_internal: false,
+                    partitions: Vec::new(),
+                    topic_authorized_operations,
+                };
+                topics.push(error_topic);
+            }
+        }
+
+        println!("[METADATA] Raw bytes: {:02X?}", content);
+        
+        if topics.is_empty() {
+            Ok(None)
+        } else {
+            Ok(Some(topics[0].clone()))
+        }
+    }
+}
+
+
+#[derive(Debug, Clone)]
+#[allow(dead_code)]
+pub struct Record {
+    length: i64,
+    /// Attributes is a 1-byte big-endian integer indicating the attributes of the record. Currently, this field is unused in the protocol.
+    attributes: i8,
+    /// Timestamp Delta is a signed variable size integer indicating the difference between the timestamp of the record and the base timestamp of the record batch.
+    timestamp_delta: i64,
+    /// Offset Delta is a signed variable size integer indicating the difference between the offset of the record and the base offset of the record batch.
+    offset_delta: i64,
+    /// Key is a byte array indicating the key of the record.
+    key: Vec<u8>,
+    /// Value Length is a signed variable size integer indicating the length of the value of the record.
+    value_length: i64,
+    /// Value is a byte array indicating the value of the record.
+    pub value: RecordValue,
+    headers: Vec<Header>,
+}
+
+impl Record {
+    pub fn from_bytes(src: &mut Bytes) -> Self {
+        let length = VarInt::deserialize(src);
+        let attributes = src.get_i8();
+        let timestamp_delta = VarInt::deserialize(src);
+        let offset_delta = VarInt::deserialize(src);
+        let key = CompactNullableBytes::deserialize(src);
+        let value_length = VarInt::deserialize(src);
+        let value = RecordValue::from_bytes(src);
+        let headers = CompactArray::deserialize::<Header, Record>(src);
+
+        Record {
+            length,
+            attributes,
+            timestamp_delta,
+            offset_delta,
+            key,
+            value_length,
+            value,
+            headers,
+        }
+    }
+}
+
+
+impl RecordValue {
+    pub fn from_bytes(src: &mut Bytes) -> Self {
+        // Frame Version is indicating the version of the format of the record.
+        let frame_version = src.get_u8();
+        assert_eq!(frame_version, 1);
+
+        let record_type = src.get_u8();
+        match record_type {
+            2 => {
+                // Topic Record Value
+                let version = src.get_u8();
+                assert_eq!(version, 0);
+                let topic_name = CompactString::deserialize(src);
+                let topic_id = Uuid::deserialize(src);
+
+                let tagged_fields_count = VarInt::deserialize(src);
+                assert_eq!(tagged_fields_count, 0);
+                RecordValue::Topic(TopicValue {
+                    topic_name,
+                    topic_id,
+                })
+            }
+            3 => {
+                // Partition Record Value
+                let version = src.get_u8();
+                assert_eq!(version, 1);
+                let partition_id = src.get_u32();
+                let topic_id = Uuid::deserialize(src);
+
+                let replicas = CompactArray::deserialize::<_, PartitionValue>(src);
+                let in_sync_replicas = CompactArray::deserialize::<_, PartitionValue>(src);
+                let removing_replicas = CompactArray::deserialize::<_, PartitionValue>(src);
+                let adding_replicas = CompactArray::deserialize::<_, PartitionValue>(src);
+
+                let leader_id = src.get_u32();
+                let leader_epoch = src.get_u32();
+                let partition_epoch = src.get_u32();
+
+                let directories = CompactArray::deserialize::<String, PartitionValue>(src);
+
+                let tagged_fields_count = VarInt::deserialize(src);
+                assert_eq!(tagged_fields_count, 0);
+
+                RecordValue::Partition(PartitionValue {
+                    partition_id,
+                    topic_id,
+                    replicas,
+                    in_sync_replicas,
+                    removing_replicas,
+                    adding_replicas,
+                    leader_id,
+                    leader_epoch,
+                    partition_epoch,
+                    directories,
+                })
+            }
+
+            12 => {
+                // Feature Level Record Value
+                let version = src.get_u8();
+                assert_eq!(version, 0);
+                let name = CompactString::deserialize(src);
+                let level = src.get_u16();
+                let tagged_fields_count = VarInt::deserialize(src);
+                assert_eq!(tagged_fields_count, 0);
+                RecordValue::FeatureLevel(FeatureLevelValue { name, level })
+            }
+
+            _ => unimplemented!(),
+        }
+    }
+}
+
+pub struct CompactString;
+impl CompactString {
+    pub fn serialize(s: &str) -> Bytes {
+        let mut b = BytesMut::new();
+        let len = s.len() as u8 + 1;
+        b.put_u8(len);
+        b.put(s.as_bytes());
+        b.freeze()
+    }
+
+    pub fn deserialize(src: &mut Bytes) -> String {
+        let len = VarInt::deserialize(src); // string length + 1
+        let string_len = if len > 1 { len as usize - 1 } else { 0 };
+        let bytes = src.slice(..string_len);
+        src.advance(string_len);
+        String::from_utf8_lossy(&bytes).into_owned()
+    }
+}
+
+pub struct VarInt;
+
+impl VarInt {
+    pub(crate) fn deserialize<T>(buf: &mut T) -> i64
+    where
+        T: bytes::Buf,
+    {
+        const MAX_BYTES: usize = 10;
+        if buf.remaining() == 0 {
+            panic!("buffer is empty")
+        }
+
+        let buf_len = buf.remaining();
+
+        let mut b0 = buf.get_i8() as i64;
+        let mut res = b0 & 0b0111_1111; // drop the MSB (continuation bit)
+        let mut n_bytes = 1;
+
+        while b0 & 0b1000_0000 != 0 && n_bytes <= MAX_BYTES {
+            // highest bit (continuation bit) in the first byte is one, get another byte
+
+            if buf.remaining() == 0 {
+                if buf_len >= MAX_BYTES {
+                    panic!("invalid varint")
+                }
+                panic!("buffer is too short ({} bytes) or invalid varint", buf_len)
+            }
+
+            let b1 = buf.get_i8() as i64;
+            if buf.remaining() == 0 && b1 & 0b1000_0000 != 0 {
+                // last byte still starts with 1
+
+                if buf_len >= 8 {
+                    panic!("invalid varint")
+                }
+                panic!("buffer is too short ({} bytes) or invalid varint", buf_len)
+            }
+
+            // drop the continuation bit and convert to big-endian
+            res += (b1 & 0b0111_1111) << 7;
+
+            n_bytes += 1;
+
+            b0 = b1;
+        }
+
+        res
+    }
+}
+
+impl Deserialize<String> for CompactString {
+    fn deserialize(src: &mut Bytes) -> String {
+        Self::deserialize(src)
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+struct Header;
+
+impl Deserialize<Header> for Record {
+    fn deserialize(_src: &mut Bytes) -> Header {
+        Header
+    }
+}
+
+
+
+#[derive(Debug, Clone)]
+#[allow(dead_code)]
+pub enum RecordValue {
+    FeatureLevel(FeatureLevelValue),
+    Topic(TopicValue),
+    Partition(PartitionValue),
+}
+
+#[derive(Debug, Clone)]
+#[allow(dead_code)]
+pub struct FeatureLevelValue {
+    name: String,
+    level: u16,
+}
+
+#[derive(Debug, Clone)]
+#[allow(dead_code)]
+pub struct PartitionValue {
+    pub partition_id: u32,
+    pub topic_id: String,
+    pub replicas: Vec<u32>,
+    /// The in-sync replicas of this partition
+    pub in_sync_replicas: Vec<u32>,
+    /// The replicas that we are in the process of removing
+    pub removing_replicas: Vec<u32>,
+    pub adding_replicas: Vec<u32>,
+    pub leader_id: u32,
+    pub leader_epoch: u32,
+    pub partition_epoch: u32,
+    pub directories: Vec<String>,
+}
+pub struct Uuid;
+
+impl Uuid {
+    pub fn serialize(s: &str) -> Bytes {
+        let mut b = BytesMut::with_capacity(32);
+        b.extend_from_slice(&hex::decode(s.replace('-', "")).expect("valid UUID string"));
+        b.freeze()
+    }
+
+    pub fn deserialize(src: &mut Bytes) -> String {
+        // 00000000-0000-0000-0000-000000000000
+        let mut s = hex::encode(src.slice(..16));
+        src.advance(16);
+        s.insert(8, '-');
+        s.insert(13, '-');
+        s.insert(18, '-');
+        s.insert(23, '-');
+        s
+    }
+}
+
+impl Deserialize<u32> for PartitionValue {
+    fn deserialize(src: &mut Bytes) -> u32 {
+        src.get_u32()
+    }
+}
+
+impl Deserialize<String> for PartitionValue {
+    fn deserialize(src: &mut Bytes) -> String {
+        Uuid::deserialize(src)
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct TopicValue {
+    pub topic_name: String,
+    pub topic_id: String, // UUID
+}
+
+
+#[derive(Debug, Clone)]
+pub struct RecordBatch {
+    pub base_offset: i64,
+    batch_length: i32,
+    partition_leader_epoch: i32,
+    magic: i8,
+    crc: u32,
+    attributes: i16,
+    last_offset_delta: i32,
+    base_timestamp: i64,
+    max_timestamp: i64,
+    producer_id: i64,
+    producer_epoch: i16,
+    base_sequence: i32,
+
+    pub records: Vec<Record>,
+}
+
+impl RecordBatch {
+    pub fn from_bytes(src: &mut Bytes) -> Self {
+        println!("[METADATA] Parsing record batch, remaining bytes: {}", src.remaining());
+        let base_offset = src.get_i64();
+        println!("[METADATA] base_offset: {}", base_offset);
+        let batch_length = src.get_i32();
+        println!("[METADATA] batch_length: {}", batch_length);
+        let partition_leader_epoch = src.get_i32();
+        let magic = src.get_i8();
+        let crc = src.get_u32();
+        let attributes = src.get_i16();
+        let last_offset_delta = src.get_i32();
+        let base_timestamp = src.get_i64();
+        let max_timestamp = src.get_i64();
+        let producer_id = src.get_i64();
+        let producer_epoch = src.get_i16();
+        let base_sequence = src.get_i32();
+        println!("[METADATA] Before parsing records, remaining bytes: {}", src.remaining());
+        let records = NullableBytes::deserialize::<Record, RecordBatch>(src);
+        println!("[METADATA] Parsed {} records", records.len());
+
+        Self {
+            base_offset,
+            batch_length,
+            partition_leader_epoch,
+            magic,
+            crc,
+            attributes,
+            last_offset_delta,
+            base_timestamp,
+            max_timestamp,
+            producer_id,
+            producer_epoch,
+            base_sequence,
+            records,
+        }
+    }
+}
+pub struct CompactArray;
+impl CompactArray {
+    pub fn serialize<T: Serialize>(items: &mut [T]) -> Bytes {
+        let mut b = BytesMut::new();
+        // COMPACT ARRAY: N+1, because null array is represented as 0, empty array (actual length of 0) is represented as 1
+        let len = items.len() as u8 + 1;
+        b.put_u8(len);
+
+        for item in items.iter_mut() {
+            b.put(item.serialize());
+        }
+
+        b.freeze()
+    }
+
+    pub fn deserialize<T, U: Deserialize<T>>(src: &mut Bytes) -> Vec<T> {
+        let len = VarInt::deserialize(src); // array length + 1
+        let items_len = if len > 1 { len as usize - 1 } else { 0 };
+
+        let mut items = Vec::with_capacity(items_len);
+        for _ in 0..items_len {
+            let item = U::deserialize(src);
+            items.push(item);
+        }
+
+        items
+    }
+}
+
+
+
+/// Represents a raw sequence of bytes or null.
+/// For non-null values, first the length N is given as an INT32. Then N bytes follow.
+/// A null value is encoded with length of -1 and there are no following bytes.
+pub struct NullableBytes;
+
+#[allow(dead_code)]
+impl NullableBytes {
+    pub fn serialize(bytes: &[u8]) -> Bytes {
+        let mut b = BytesMut::new();
+        let len = bytes.len() as i32 + 1;
+        b.put_i32(len);
+        b.put(bytes);
+        b.freeze()
+    }
+
+    pub fn deserialize<T, U: Deserialize<T>>(src: &mut Bytes) -> Vec<T> {
+        println!("[METADATA] Deserializing nullable bytes, remaining: {}", src.remaining());
+        let len = src.get_i32();
+        println!("[METADATA] Length field: {}", len);
+        let items_len = if len == -1 { 0 } else { len as usize };
+        println!("[METADATA] Items length: {}", items_len);
+
+        let mut items = Vec::with_capacity(items_len);
+        for i in 0..items_len {
+            println!("[METADATA] Deserializing item {}/{}", i+1, items_len);
+            let item = U::deserialize(src);
+            items.push(item);
+        }
+        println!("[METADATA] Deserialized {} items", items.len());
+        items
+    }
+}
+
+
+pub trait Deserialize<T> {
+    fn deserialize(src: &mut Bytes) -> T;
+}
+
+pub trait Serialize {
+    fn serialize(&mut self) -> Bytes;
+}
+
+impl Deserialize<Record> for RecordBatch {
+    fn deserialize(src: &mut Bytes) -> Record {
+        Record::from_bytes(src)
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct ClusterMetadata {
-    pub batches: Vec<MetadataBatch>,
+    pub batches: Vec<RecordBatch>,
     pub topics: Vec<TopicMetadata>,
 }
 
@@ -37,344 +557,23 @@ struct RecordHeader {
     value_length: i64,  // varint
 }
 
-#[async_trait]
-impl MetadataStore for KraftMetadataStore {
-    async fn get_topic_metadata(&self, topic_name: &str) -> std::result::Result<Option<TopicMetadata>, ApplicationError> {
-        let path = self.get_metadata_log_path();
-        let content = read(&path).await.map_err(ApplicationError::Io)?;
-        
-        println!("[METADATA] Raw bytes: {:02X?}", content);
-        
-        let content_slice = content.as_slice();
-        let mut cursor = std::io::Cursor::new(content_slice);
-        let mut found_topic_uuid = None;
-        let mut partitions = Vec::new();
+pub struct CompactNullableBytes;
 
-        // Keep reading batches until we reach the end of the file or find an error
-        while cursor.position() < content_slice.len() as u64 {
-            let batch_start_position = cursor.position();
-            println!("[METADATA] Reading batch at position: {}", batch_start_position);
-            
-            let base_offset = read_u64(&mut cursor)?;
-            let batch_length = read_u32(&mut cursor)?;
-            println!("[METADATA] Batch length: {}", batch_length);
-            
-            let mut batch = MetadataBatch {
-                base_offset,
-                batch_length,
-                partition_leader_epoch: read_u32(&mut cursor)?,
-                magic_byte: read_u8(&mut cursor)?,
-                crc: read_u32(&mut cursor)?,
-                attributes: read_u16(&mut cursor)?,
-                last_offset_delta: read_u32(&mut cursor)?,
-                base_timestamp: read_u64(&mut cursor)?,
-                max_timestamp: read_u64(&mut cursor)?,
-                producer_id: read_i64(&mut cursor)?,
-                producer_epoch: read_i16(&mut cursor)?,
-                base_sequence: read_i32(&mut cursor)?,
-                records: Vec::new(),
-            };
-
-            let records_length = read_u32(&mut cursor)?;
-            println!("[METADATA] Records length in current batch: {}", records_length);
-
-            for record_index in 0..records_length {
-                println!("[METADATA] Parsing record {}/{}", record_index + 1, records_length);
-                
-                let record_start_position = cursor.position();
-                println!("[METADATA] Record start position: {}", record_start_position);
-                let mut next_byte = read_u8(&mut cursor)?;
-                println!("[METADATA] First byte of record: {:02X}", next_byte);
-                cursor.set_position(record_start_position);  // Reset position
-                
-                let record_length = read_varint(&mut cursor)?;
-                println!("[METADATA] Record length (VARINT): {}", record_length);
-                
-                let attributes = read_u8(&mut cursor)?;
-                println!("[METADATA] Record attributes: {:02X}", attributes);
-                
-                let timestamp_delta = read_varint(&mut cursor)?;
-                println!("[METADATA] Timestamp delta: {}", timestamp_delta);
-                
-                let offset_delta = read_varint(&mut cursor)?;
-                println!("[METADATA] Offset delta: {}", offset_delta);
-                
-                let key_length = read_varint(&mut cursor)?;
-                println!("[METADATA] Key length: {}", key_length);
-                
-                let value_length = read_varint(&mut cursor)?;
-                println!("[METADATA] Value length: {}", value_length);
-
-                if value_length > 0 {
-                    let frame_version = read_u8(&mut cursor)?;
-                    let record_type = read_u8(&mut cursor)?;
-                    let version = read_u8(&mut cursor)?;
-                    println!("[METADATA] Record header - frame_version: {}, type: {:02X}, version: {}", frame_version, record_type, version);
-                    
-                    match record_type {
-                        0x0c => { // FeatureLevel
-                            let name_length = read_varint(&mut cursor)? as usize;
-                            let mut name_bytes = vec![0u8; name_length];
-                            cursor.read_exact(&mut name_bytes).map_err(|e| ApplicationError::Io(e))?;
-                            let name = String::from_utf8(name_bytes[..name_length-1].to_vec())
-                                .map_err(|_| ApplicationError::Io(std::io::Error::new(std::io::ErrorKind::InvalidData, "Invalid UTF-8")))?;
-                            
-                            let feature_level = read_u16(&mut cursor)?;
-                            let _tagged_fields_count = read_varint(&mut cursor)?;
-                            
-                            batch.records.push(Record::FeatureLevel {
-                                frame_version,
-                                version,
-                                name,
-                                value: feature_level.to_be_bytes().to_vec(),
-                            });
-                        }
-                        0x02 => { // Topic
-                            let name_length = read_varint(&mut cursor)? as usize;
-                            println!("[METADATA] Topic record - name_length (VARINT): {}", name_length);
-                            
-                            let mut name_bytes = vec![0u8; name_length];
-                            cursor.read_exact(&mut name_bytes).map_err(|e| ApplicationError::Io(e))?;
-                            println!("[METADATA] Topic record - name_bytes: {:02X?}", name_bytes);
-                            
-                            let name = String::from_utf8(name_bytes[..name_length-1].to_vec())
-                                .map_err(|_| ApplicationError::Io(std::io::Error::new(std::io::ErrorKind::InvalidData, "Invalid UTF-8")))?;
-                            println!("[METADATA] Topic record - name: {}", name);
-                            
-                            println!("[METADATA] Current buffer position before UUID: {}", cursor.position());
-                            
-                            let mut uuid = [0u8; 16];
-                            cursor.read_exact(&mut uuid)?;
-                            
-                            // FIXME: Topic Record의 UUID가 한 바이트씩 앞으로 밀려서 읽히는 현상 보정
-                            // 정확한 원인은 불명확하나 Topic Record에서만 발생하는 문제
-                            for i in (1..16).rev() {
-                                uuid[i] = uuid[i-1];
-                            }
-                            uuid[0] = 0;
-                            
-                            println!("[METADATA] Topic record - uuid bytes: {:02X?}", uuid);
-                            println!("[METADATA] Current buffer position after UUID: {}", cursor.position());
-                            
-                            let _tagged_fields_count = read_varint(&mut cursor)?;
-                            println!("[METADATA] Topic record - tagged_fields_count: {}", _tagged_fields_count);
-                            println!("[METADATA] Current buffer position after tagged_fields_count: {}", cursor.position());
-                            
-                            let topic_name_clone = name.clone();
-                            batch.records.push(Record::Topic {
-                                frame_version,
-                                version,
-                                name: topic_name_clone,
-                                uuid,
-                            });
-                            
-                            // If this is the topic we're looking for, store its UUID
-                            if name == topic_name {
-                                println!("[METADATA] Found matching topic: {} with UUID: {:02X?}", name, uuid);
-                                found_topic_uuid = Some(uuid);
-                            } else {
-                                println!("[METADATA] Topic name mismatch - looking for: {}, found: {}", topic_name, name);
-                            }
-                        }
-                        0x03 => { // Partition
-                            let partition_id = read_u32(&mut cursor)?;
-                            
-                            let mut topic_uuid = [0u8; 16];
-                            cursor.read_exact(&mut topic_uuid).map_err(|e| ApplicationError::Io(e))?;
-                            
-                            let leader_id = read_u32(&mut cursor)?;
-                            let leader_epoch = read_u32(&mut cursor)?;
-                            
-                            // Read replica nodes
-                            let replica_count = read_varint(&mut cursor)? as usize;
-                            let mut replica_nodes = Vec::with_capacity(replica_count);
-                            for _ in 0..replica_count {
-                                replica_nodes.push(read_u32(&mut cursor)?);
-                            }
-                            
-                            // Read ISR nodes
-                            let isr_count = read_varint(&mut cursor)? as usize;
-                            let mut isr_nodes = Vec::with_capacity(isr_count);
-                            for _ in 0..isr_count {
-                                isr_nodes.push(read_u32(&mut cursor)?);
-                            }
-                            
-                            let partition_epoch = read_u32(&mut cursor)?;
-                            
-                            // Read directories
-                            let dir_count = read_varint(&mut cursor)? as usize;
-                            let mut directories = Vec::with_capacity(dir_count);
-                            for _ in 0..dir_count {
-                                let mut dir_uuid = [0u8; 16];
-                                cursor.read_exact(&mut dir_uuid).map_err(|e| ApplicationError::Io(e))?;
-                                directories.push(dir_uuid);
-                            }
-                            
-                            let _tagged_fields_count = read_varint(&mut cursor)?;
-                            
-                            let partition = Record::Partition {
-                                partition_id,
-                                topic_uuid,
-                                leader_id,
-                                leader_epoch,
-                                replica_nodes: replica_nodes.clone(),
-                                in_sync_replica_nodes: isr_nodes.clone(),
-                                partition_epoch,
-                                directories,
-                            };
-                            
-                            batch.records.push(partition);
-                            
-                            // If this partition belongs to our topic, store its metadata
-                            if let Some(target_uuid) = found_topic_uuid {
-                                println!("[METADATA] Comparing UUIDs - Target: {:02X?}, Found: {:02X?}", target_uuid, topic_uuid);
-                                if topic_uuid == target_uuid {
-                                    println!("[METADATA] Found matching partition {} for topic", partition_id);
-                                    partitions.push(crate::domain::message::PartitionMetadata::new(
-                                        partition_id as i32,
-                                        leader_id as i32,
-                                        replica_nodes.iter().map(|&x| x as i32).collect(),
-                                        isr_nodes.iter().map(|&x| x as i32).collect(),
-                                    ));
-                                }
-                            }
-                        }
-                        // Add other record types as needed
-                        _ => return Err(ApplicationError::Io(std::io::Error::new(std::io::ErrorKind::InvalidData, "Unknown record type"))),
-                    }
-                }
-                
-                // Skip to the end of the record based on record_length
-                let record_end_position = record_start_position + record_length as u64;
-                cursor.set_position(record_end_position);
-                println!("[METADATA] Skipping to next record at position: {}", record_end_position);
-            }
-            
-            // Skip to the next batch based on batch_length
-            let batch_end_position = batch_start_position + batch_length as u64 + 12;  // +12 for base_offset(8) and batch_length(4)
-            cursor.set_position(batch_end_position);
-            println!("[METADATA] Skipping to next batch at position: {}", batch_end_position);
-        }
-
-        // Return topic metadata if we found both the topic and its partitions
-        if let Some(uuid) = found_topic_uuid {
-            Ok(Some(TopicMetadata::new(
-                topic_name.to_string(),
-                uuid,
-                partitions,
-            )))
-        } else {
-            Ok(None)
-        }
+#[allow(dead_code)]
+impl CompactNullableBytes {
+    pub fn serialize(bytes: &[u8]) -> Bytes {
+        let mut b = BytesMut::new();
+        let len = bytes.len() as u8 + 1; // should be varint
+        b.put_u8(len);
+        b.put(bytes);
+        b.freeze()
     }
-}
 
-// Helper functions for reading binary data
-fn read_u8(cursor: &mut std::io::Cursor<&[u8]>) -> Result<u8, ApplicationError> {
-    let mut buf = [0u8; 1];
-    cursor.read_exact(&mut buf).map_err(ApplicationError::Io)?;
-    Ok(buf[0])
-}
-
-fn read_u16(cursor: &mut std::io::Cursor<&[u8]>) -> Result<u16, ApplicationError> {
-    let mut buf = [0u8; 2];
-    cursor.read_exact(&mut buf).map_err(ApplicationError::Io)?;
-    Ok(u16::from_be_bytes(buf))
-}
-
-fn read_u32(cursor: &mut std::io::Cursor<&[u8]>) -> Result<u32, ApplicationError> {
-    let mut buf = [0u8; 4];
-    cursor.read_exact(&mut buf).map_err(ApplicationError::Io)?;
-    Ok(u32::from_be_bytes(buf))
-}
-
-fn read_u64(cursor: &mut std::io::Cursor<&[u8]>) -> Result<u64, ApplicationError> {
-    let mut buf = [0u8; 8];
-    cursor.read_exact(&mut buf).map_err(ApplicationError::Io)?;
-    Ok(u64::from_be_bytes(buf))
-}
-
-fn read_i16(cursor: &mut std::io::Cursor<&[u8]>) -> Result<i16, ApplicationError> {
-    let mut buf = [0u8; 2];
-    cursor.read_exact(&mut buf).map_err(ApplicationError::Io)?;
-    Ok(i16::from_be_bytes(buf))
-}
-
-fn read_i32(cursor: &mut std::io::Cursor<&[u8]>) -> Result<i32, ApplicationError> {
-    let mut buf = [0u8; 4];
-    cursor.read_exact(&mut buf).map_err(ApplicationError::Io)?;
-    Ok(i32::from_be_bytes(buf))
-}
-
-fn read_i64(cursor: &mut std::io::Cursor<&[u8]>) -> Result<i64, ApplicationError> {
-    let mut buf = [0u8; 8];
-    cursor.read_exact(&mut buf).map_err(ApplicationError::Io)?;
-    Ok(i64::from_be_bytes(buf))
-}
-
-fn read_varint(cursor: &mut std::io::Cursor<&[u8]>) -> Result<i64, ApplicationError> {
-    let mut value: i64 = 0;
-    let mut shift = 0;
-    
-    loop {
-        let byte = read_u8(cursor)?;
-        println!("[METADATA] Reading varint byte: {:02X}", byte);
-        value |= ((byte & 0x7f) as i64) << shift;
-        if byte & 0x80 == 0 {
-            break;
-        }
-        shift += 7;
-        if shift > 63 {
-            return Err(ApplicationError::Io(std::io::Error::new(
-                std::io::ErrorKind::InvalidData,
-                "VarInt is too long",
-            )));
-        }
+    pub fn deserialize(src: &mut Bytes) -> Vec<u8> {
+        let len = VarInt::deserialize(src);
+        let bytes_len = if len > 1 { len as usize - 1 } else { 0 };
+        let bytes = src.slice(..bytes_len);
+        src.advance(bytes_len);
+        Vec::from(bytes)
     }
-    
-    println!("[METADATA] Decoded varint value: {}", value);
-    Ok(value)
-}
-
-#[derive(Debug, Clone)]
-pub enum Record {
-    FeatureLevel {
-        frame_version: u8,
-        version: u8,
-        name: String,
-        value: Vec<u8>,
-    },
-    Topic {
-        frame_version: u8,
-        version: u8,
-        name: String,
-        uuid: [u8; 16],
-    },
-    Partition {
-        partition_id: u32,
-        topic_uuid: [u8; 16],
-        leader_id: u32,
-        leader_epoch: u32,
-        replica_nodes: Vec<u32>,
-        in_sync_replica_nodes: Vec<u32>,
-        partition_epoch: u32,
-        directories: Vec<[u8; 16]>,
-    }
-}
-
-#[derive(Debug, Clone)]
-pub struct MetadataBatch {
-    pub base_offset: u64,
-    pub batch_length: u32,
-    pub partition_leader_epoch: u32,
-    pub magic_byte: u8,
-    pub crc: u32,
-    pub attributes: u16,
-    pub last_offset_delta: u32,
-    pub base_timestamp: u64,
-    pub max_timestamp: u64,
-    pub producer_id: i64,
-    pub producer_epoch: i16,
-    pub base_sequence: i32,
-    pub records: Vec<Record>,
 }
