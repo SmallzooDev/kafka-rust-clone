@@ -318,13 +318,21 @@ fn read_varint(cursor: &mut std::io::Cursor<&[u8]>) -> Result<i64, ApplicationEr
     
     loop {
         let byte = read_u8(cursor)?;
+        println!("[METADATA] Reading varint byte: {:02X}", byte);
         value |= ((byte & 0x7f) as i64) << shift;
         if byte & 0x80 == 0 {
             break;
         }
         shift += 7;
+        if shift > 63 {
+            return Err(ApplicationError::Io(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "VarInt is too long",
+            )));
+        }
     }
     
+    println!("[METADATA] Decoded varint value: {}", value);
     Ok(value)
 }
 
