@@ -473,3 +473,184 @@ impl Uuid {
         Ok(s)
     }
 } 
+
+pub fn decode_varint(buf: &[u8]) -> u64 {
+    let mut result: u64 = 0;
+    let mut shift = 0;
+    
+    for &byte in buf {
+        result |= ((byte & 0x7f) as u64) << shift;
+        shift += 7;
+        
+        if byte & 0x80 == 0 {
+            break;
+        }
+    }
+    
+    result
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_decode_varint() {
+        // 단순한 1바이트 varint
+        assert_eq!(decode_varint(&[1]), 1);
+        
+        // 2바이트 varint
+        assert_eq!(decode_varint(&[0x80, 0x01]), 128);
+        
+        // 3바이트 varint
+        assert_eq!(decode_varint(&[0x80, 0x80, 0x01]), 16384);
+    }
+
+    #[test]
+    fn test_compact_string_deserialize() {
+        let mut bytes = Bytes::from(vec![6, b'h', b'e', b'l', b'l', b'o']);
+        assert_eq!(CompactString::deserialize(&mut bytes).unwrap(), "hello");
+
+        // 빈 문자열
+        let mut bytes = Bytes::from(vec![1]);
+        assert_eq!(CompactString::deserialize(&mut bytes).unwrap(), "");
+
+        // 잘못된 UTF-8
+        let mut bytes = Bytes::from(vec![2, 0xff]);
+        assert!(CompactString::deserialize(&mut bytes).is_err());
+    }
+
+    #[test]
+    fn test_compact_array_deserialize() {
+        // u32 배열 테스트
+        let mut bytes = Bytes::from(vec![
+            3,              // array length (2 + 1)
+            0, 0, 0, 1,    // first element
+            0, 0, 0, 2,    // second element
+        ]);
+        let result: Vec<u32> = CompactArray::deserialize::<u32, PartitionValue>(&mut bytes).unwrap();
+        assert_eq!(result, vec![1, 2]);
+
+        // 빈 배열
+        let mut bytes = Bytes::from(vec![1]); // length = 1 means empty array
+        let result: Vec<u32> = CompactArray::deserialize::<u32, PartitionValue>(&mut bytes).unwrap();
+        assert_eq!(result, Vec::<u32>::new());
+    }
+
+    #[test]
+    fn test_record_value_from_bytes() {
+        // Topic 레코드 테스트
+        let mut bytes = Bytes::from(vec![
+            1,   // frame version
+            2,   // record type (Topic)
+            0,   // version
+            5,   // topic name length (4 + 1)
+            b't', b'e', b's', b't',  // topic name
+            0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+            0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,  // topic id (UUID)
+            0,   // tagged fields count
+        ]);
+        
+        match RecordValue::from_bytes(&mut bytes).unwrap() {
+            RecordValue::Topic(topic) => {
+                assert_eq!(topic.topic_name, "test");
+                assert_eq!(topic.topic_id, "ffffffff-ffff-ffff-ffff-ffffffffffff");
+            }
+            _ => panic!("Expected Topic record"),
+        }
+
+        // Partition 레코드 테스트
+        let mut bytes = Bytes::from(vec![
+            1,   // frame version
+            3,   // record type (Partition)
+            1,   // version
+            0, 0, 0, 1,  // partition id
+            0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+            0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,  // topic id (UUID)
+            1,   // replicas array length (empty)
+            1,   // isr array length (empty)
+            1,   // removing replicas array length (empty)
+            1,   // adding replicas array length (empty)
+            0, 0, 0, 1,  // leader id
+            0, 0, 0, 0,  // leader epoch
+            0, 0, 0, 0,  // partition epoch
+            1,   // directories array length (empty)
+            0,   // tagged fields count
+        ]);
+
+        match RecordValue::from_bytes(&mut bytes).unwrap() {
+            RecordValue::Partition(partition) => {
+                assert_eq!(partition.partition_id, 1);
+                assert_eq!(partition.topic_id, "ffffffff-ffff-ffff-ffff-ffffffffffff");
+                assert_eq!(partition.leader_id, 1);
+                assert_eq!(partition.leader_epoch, 0);
+                assert!(partition.replicas.is_empty());
+                assert!(partition.in_sync_replicas.is_empty());
+                assert!(partition.removing_replicas.is_empty());
+                assert!(partition.adding_replicas.is_empty());
+            }
+            _ => panic!("Expected Partition record"),
+        }
+    }
+
+    #[test]
+    fn test_record_batch_from_bytes() {
+        let mut bytes = Bytes::from(vec![
+            0, 0, 0, 0, 0, 0, 0, 1,  // base offset
+            0, 0, 0, 100,            // batch length
+            0, 0, 0, 0,              // partition leader epoch
+            2,                       // magic
+            0, 0, 0, 0,              // crc
+            0, 1,                    // attributes
+            0, 0, 0, 0,              // last offset delta
+            0, 0, 0, 0, 0, 0, 0, 0,  // base timestamp
+            0, 0, 0, 0, 0, 0, 0, 0,  // max timestamp
+            0, 0, 0, 0, 0, 0, 0, 0,  // producer id
+            0, 0,                    // producer epoch
+            0, 0, 0, 0,              // base sequence
+            0, 0, 0, 0,              // records length (empty)
+        ]);
+
+        let batch = RecordBatch::from_bytes(&mut bytes).unwrap();
+        assert_eq!(batch.base_offset, 1);
+        assert_eq!(batch.batch_length, 100);
+        assert_eq!(batch.magic, 2);
+        assert_eq!(batch.attributes, 1);
+        assert!(batch.records.is_empty());
+    }
+
+    #[test]
+    fn test_record_from_bytes() {
+        let mut bytes = Bytes::from(vec![
+            2,                       // length
+            0,                       // attributes
+            2,                       // timestamp delta
+            2,                       // offset delta
+            1,                       // key length (empty)
+            2,                       // value length
+            1,                       // frame version
+            12,                      // record type (FeatureLevel)
+            0,                       // version
+            5,                       // feature name length (4 + 1)
+            b't', b'e', b's', b't',  // feature name
+            0, 1,                    // level
+            0,                       // tagged fields count
+            1,                       // headers length (empty)
+        ]);
+
+        let record = Record::from_bytes(&mut bytes).unwrap();
+        assert_eq!(record.length, 2);
+        assert_eq!(record.attributes, 0);
+        assert_eq!(record.timestamp_delta, 2);
+        assert_eq!(record.offset_delta, 2);
+        assert!(record.key.is_empty());
+        
+        match record.value {
+            RecordValue::FeatureLevel(feature) => {
+                assert_eq!(feature.name, "test");
+                assert_eq!(feature.level, 1);
+            }
+            _ => panic!("Expected FeatureLevel record"),
+        }
+    }
+} 
