@@ -1,5 +1,5 @@
 use crate::application::error::ApplicationError;
-use crate::domain::message::{
+use crate::adapters::incoming::protocol::messages::{
     ApiVersion, ApiVersionsResponse, DescribeTopicPartitionsRequest, DescribeTopicPartitionsResponse,
     KafkaRequest, KafkaResponse, RequestHeader, RequestPayload, ResponsePayload, PartitionInfo,
 };
@@ -263,7 +263,7 @@ fn decode_varint(buf: &[u8]) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::domain::message::{
+    use crate::adapters::incoming::protocol::messages::{
         ApiVersion, ApiVersionsResponse, DescribeTopicPartitionsResponse, PartitionInfo
     };
     use crate::adapters::incoming::protocol::constants::{

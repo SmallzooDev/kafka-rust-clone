@@ -1,5 +1,5 @@
 use async_trait::async_trait;
-use crate::domain::message::KafkaMessage;
+use crate::adapters::incoming::protocol::messages::KafkaMessage;
 use crate::Result;
 
 #[async_trait]

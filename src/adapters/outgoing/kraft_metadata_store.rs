@@ -1,7 +1,8 @@
+use crate::adapters::incoming::protocol::messages::ErrorCode;
 use crate::adapters::outgoing::protocol::kraft_record::{RecordBatch, RecordValue};
 use crate::application::error::ApplicationError;
 use crate::domain::message::TopicMetadata;
-use crate::domain::message::{ErrorCode, Partition};
+use crate::domain::message::{Partition};
 use crate::ports::outgoing::metadata_store::MetadataStore;
 use async_trait::async_trait;
 use bytes::{Buf, BytesMut};
@@ -65,7 +66,7 @@ impl MetadataStore for KraftMetadataStore {
                         RecordValue::Partition(p) if p.topic_id == topic_id => {
                             println!("[DEBUG] Found partition for topic {}: partition_id={}, leader_id={}", topic_name, p.partition_id, p.leader_id);
                             partitions.push(Partition::new(
-                                ErrorCode::None,
+                                i16::from(ErrorCode::None),
                                 p.partition_id,
                                 p.leader_id,
                                 p.leader_epoch,
@@ -82,7 +83,7 @@ impl MetadataStore for KraftMetadataStore {
 
                 if !partitions.is_empty() {
                     let topic = TopicMetadata {
-                        error_code: topic_error_code,
+                        error_code: i16::from(topic_error_code),
                         name: topic_name.to_string(),
                         topic_id: topic_id.clone(),
                         is_internal: false,
@@ -104,7 +105,7 @@ impl MetadataStore for KraftMetadataStore {
             }
             if !topic_found {
                 let error_topic = TopicMetadata {
-                    error_code: ErrorCode::UnknownTopicOrPartition,
+                    error_code: i16::from(ErrorCode::UnknownTopicOrPartition),
                     name: requested_topic.to_string(),
                     topic_id: topic_id.clone(),
                     is_internal: false,

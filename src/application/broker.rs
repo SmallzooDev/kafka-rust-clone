@@ -3,10 +3,12 @@ use crate::ports::outgoing::message_store::MessageStore;
 use crate::ports::outgoing::metadata_store::MetadataStore;
 use crate::Result;
 use async_trait::async_trait;
-use crate::domain::message::{
+use crate::adapters::incoming::protocol::messages::{
     KafkaRequest, KafkaResponse, ApiVersionsResponse, ResponsePayload,
-    RequestPayload, DescribeTopicPartitionsResponse, PartitionInfo, ErrorCode
+    RequestPayload, DescribeTopicPartitionsResponse, PartitionInfo, ErrorCode,
+    RequestHeader, KafkaMessage,
 };
+use crate::domain::message::TopicMetadata;
 use crate::adapters::incoming::protocol::constants::{
     API_VERSIONS_KEY, UNSUPPORTED_VERSION,
     DESCRIBE_TOPIC_PARTITIONS_KEY, UNKNOWN_TOPIC_OR_PARTITION
@@ -61,13 +63,7 @@ impl MessageHandler for KafkaBroker {
                                 let partitions = metadata.partitions.iter()
                                     .map(|p| PartitionInfo {
                                         partition_id: p.partition_index as i32,
-                                        error_code: match p.error_code {
-                                            ErrorCode::None => 0,
-                                            ErrorCode::UnknownTopicOrPartition => 3,
-                                            ErrorCode::UnsupportedVersion => 35,
-                                            ErrorCode::InvalidRequest => 42,
-                                            ErrorCode::UnknownTopicId => 100,
-                                        },
+                                        error_code: p.error_code,
                                     })
                                     .collect();
 
@@ -125,7 +121,8 @@ mod tests {
     use super::*;
     use std::sync::Arc;
     use async_trait::async_trait;
-    use crate::domain::message::{RequestHeader, TopicMetadata, DescribeTopicPartitionsRequest, KafkaMessage};
+    use crate::adapters::incoming::protocol::messages::{RequestHeader, DescribeTopicPartitionsRequest, KafkaMessage};
+    use crate::domain::message::TopicMetadata;
 
     struct MockMessageStore;
     #[async_trait]
@@ -158,7 +155,7 @@ mod tests {
     async fn test_handle_describe_topic_partitions_existing_topic() -> Result<()> {
         let topic_id = "00000000-0000-0000-0000-000000000001".to_string();
         let topic_metadata = TopicMetadata {
-            error_code: crate::domain::message::ErrorCode::None,
+            error_code: i16::from(ErrorCode::None),
             name: "test-topic".to_string(),
             topic_id: topic_id.clone(),
             is_internal: false,

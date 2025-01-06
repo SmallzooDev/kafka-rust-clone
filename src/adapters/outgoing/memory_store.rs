@@ -1,6 +1,6 @@
 use async_trait::async_trait;
 use crate::ports::outgoing::message_store::MessageStore;
-use crate::domain::message::KafkaMessage;
+use crate::adapters::incoming::protocol::messages::KafkaMessage;
 use crate::Result;
 
 pub struct MemoryMessageStore {
