@@ -37,8 +37,11 @@ impl MetadataStore for KraftMetadataStore {
         let mut topic_error_code = ErrorCode::UnknownTopicOrPartition;
         let topic_authorized_operations = 0x0DF;
 
+        println!("[DEBUG] Requested topics: {:?}", requested_topics);
+
         while data.remaining() > 0 {
             let record_batch = RecordBatch::from_bytes(&mut data)?;
+            println!("[DEBUG] Processing record batch with {} records", record_batch.records.len());
 
             for topic_name in &requested_topics {
                 topic_id =  "00000000-0000-0000-0000-000000000000".to_string();
@@ -49,6 +52,7 @@ impl MetadataStore for KraftMetadataStore {
                     let record_type = &rec.value;
                     if let Some(id) = match record_type {
                         RecordValue::Topic(ref topic) if topic.topic_name == *topic_name => {
+                            println!("[DEBUG] Found topic match: {} with ID: {}", topic.topic_name, topic.topic_id);
                             Some(topic.topic_id.clone())
                         }
                         _ => None,
@@ -59,6 +63,7 @@ impl MetadataStore for KraftMetadataStore {
 
                     match record_type {
                         RecordValue::Partition(p) if p.topic_id == topic_id => {
+                            println!("[DEBUG] Found partition for topic {}: partition_id={}, leader_id={}", topic_name, p.partition_id, p.leader_id);
                             partitions.push(Partition::new(
                                 ErrorCode::None,
                                 p.partition_id,
@@ -84,6 +89,7 @@ impl MetadataStore for KraftMetadataStore {
                         partitions,
                         topic_authorized_operations,
                     };
+                    println!("[DEBUG] Created topic metadata for {}: {:?}", topic_name, topic);
                     topics.push(topic);
                 }
             }
@@ -105,13 +111,16 @@ impl MetadataStore for KraftMetadataStore {
                     partitions: Vec::new(),
                     topic_authorized_operations,
                 };
+                println!("[DEBUG] Created error topic metadata for {}: {:?}", requested_topic, error_topic);
                 topics.push(error_topic);
             }
         }
 
         if topics.is_empty() {
+            println!("[DEBUG] No topics found");
             Ok(None)
         } else {
+            println!("[DEBUG] Returning topic metadata: {:?}", topics[0]);
             Ok(Some(topics[0].clone()))
         }
     }

@@ -5,7 +5,7 @@ use crate::Result;
 use async_trait::async_trait;
 use crate::domain::message::{
     KafkaRequest, KafkaResponse, ApiVersionsResponse, ResponsePayload,
-    RequestPayload, DescribeTopicPartitionsResponse, PartitionInfo
+    RequestPayload, DescribeTopicPartitionsResponse, PartitionInfo, ErrorCode
 };
 use crate::adapters::incoming::protocol::constants::{
     API_VERSIONS_KEY, UNSUPPORTED_VERSION,
@@ -61,7 +61,13 @@ impl MessageHandler for KafkaBroker {
                                 let partitions = metadata.partitions.iter()
                                     .map(|p| PartitionInfo {
                                         partition_id: p.partition_index as i32,
-                                        error_code: 0,
+                                        error_code: match p.error_code {
+                                            ErrorCode::None => 0,
+                                            ErrorCode::UnknownTopicOrPartition => 3,
+                                            ErrorCode::UnsupportedVersion => 35,
+                                            ErrorCode::InvalidRequest => 42,
+                                            ErrorCode::UnknownTopicId => 100,
+                                        },
                                     })
                                     .collect();
 

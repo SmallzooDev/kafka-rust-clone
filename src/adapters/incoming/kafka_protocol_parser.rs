@@ -196,8 +196,8 @@ impl ProtocolParser for KafkaProtocolParser {
                 // Write each partition
                 for partition in &describe_response.partitions {
                     println!("[RESPONSE] Encoding partition: {:?}", partition);
-                    buf.put_i32(partition.partition_id);  // partition id
-                    buf.put_i16(partition.error_code);  // partition error code
+                    buf.put_i16(partition.error_code);  // error code 먼저
+                    buf.put_i32(partition.partition_id);  // 그 다음 partition id
                     buf.put_i32(1);  // leader id (1로 고정)
                     buf.put_i32(0);  // leader epoch
                     
