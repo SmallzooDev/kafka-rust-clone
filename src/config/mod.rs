@@ -1,34 +1,6 @@
-use std::sync::Arc;
-use std::path::PathBuf;
-use crate::application::broker::KafkaBroker;
-use crate::adapters::outgoing::memory_store::MemoryMessageStore;
-use crate::adapters::outgoing::kraft_metadata_store::KraftMetadataStore;
-use crate::ports::incoming::message_handler::MessageHandler;
+mod app_config;
+mod test_config;
 
-pub struct AppConfig {
-    pub broker: Arc<dyn MessageHandler>,
-}
-
-impl AppConfig {
-    pub fn new(server_properties_path: &str) -> Self {
-        // Initialize stores
-        let message_store = Box::new(MemoryMessageStore::new());
-        let metadata_store = Box::new(KraftMetadataStore::new(
-            PathBuf::from("/tmp/kraft-combined-logs")
-        ));
-
-        // Initialize broker with both stores
-        let broker = Arc::new(KafkaBroker::new(message_store, metadata_store));
-
-        Self { broker }
-    }
-
-    #[cfg(test)]
-    pub fn with_custom_components(
-        message_handler: Arc<dyn MessageHandler>,
-    ) -> Self {
-        Self {
-            broker: message_handler,
-        }
-    }
-} 
+pub use app_config::AppConfig;
+#[cfg(test)]
+pub use test_config::create_test_config; 

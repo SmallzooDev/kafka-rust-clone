@@ -3,24 +3,20 @@ use crate::adapters::incoming::protocol::messages::{
     ApiVersion, ApiVersionsResponse, DescribeTopicPartitionsRequest, DescribeTopicPartitionsResponse,
     KafkaRequest, KafkaResponse, RequestHeader, RequestPayload, ResponsePayload, PartitionInfo,
 };
-use crate::ports::incoming::protocol_parser::ProtocolParser;
 use crate::adapters::incoming::protocol::constants::{
     API_VERSIONS_KEY, DESCRIBE_TOPIC_PARTITIONS_KEY, MAX_SUPPORTED_VERSION, UNKNOWN_TOPIC_OR_PARTITION,
 };
-use async_trait::async_trait;
 use bytes::{Buf, BufMut, Bytes, BytesMut};
 
+#[derive(Clone)]
 pub struct KafkaProtocolParser;
 
 impl KafkaProtocolParser {
     pub fn new() -> Self {
         Self
     }
-}
 
-#[async_trait]
-impl ProtocolParser for KafkaProtocolParser {
-    fn parse_request(&self, data: &[u8]) -> Result<KafkaRequest, ApplicationError> {
+    pub fn parse_request(&self, data: &[u8]) -> Result<KafkaRequest, ApplicationError> {
         println!("[REQUEST] Raw bytes: {:02x?}", data);
         let mut buf = Bytes::copy_from_slice(data);
         
@@ -140,7 +136,7 @@ impl ProtocolParser for KafkaProtocolParser {
         Ok(KafkaRequest::new(header, payload))
     }
 
-    fn encode_response(&self, response: KafkaResponse) -> Vec<u8> {
+    pub fn encode_response(&self, response: KafkaResponse) -> Vec<u8> {
         let mut buf = BytesMut::new();
         
         // correlation_id

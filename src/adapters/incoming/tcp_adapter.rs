@@ -1,5 +1,5 @@
 use crate::ports::incoming::message_handler::MessageHandler;
-use crate::ports::incoming::protocol_parser::ProtocolParser;
+use crate::adapters::incoming::kafka_protocol_parser::KafkaProtocolParser;
 use crate::application::ApplicationError;
 use crate::Result;
 use std::sync::Arc;
@@ -9,14 +9,14 @@ use tokio::net::{TcpListener, TcpStream};
 pub struct TcpAdapter {
     listener: TcpListener,
     message_handler: Arc<dyn MessageHandler>,
-    protocol_parser: Arc<dyn ProtocolParser>,
+    protocol_parser: KafkaProtocolParser,
 }
 
 impl TcpAdapter {
     pub async fn new(
         addr: &str, 
         message_handler: Arc<dyn MessageHandler>,
-        protocol_parser: Arc<dyn ProtocolParser>,
+        protocol_parser: KafkaProtocolParser,
     ) -> Result<Self> {
         let listener = TcpListener::bind(addr).await.map_err(ApplicationError::Io)?;
         Ok(Self { 
@@ -33,7 +33,7 @@ impl TcpAdapter {
             match self.listener.accept().await {
                 Ok((stream, _)) => {
                     let message_handler = Arc::clone(&self.message_handler);
-                    let protocol_parser = Arc::clone(&self.protocol_parser);
+                    let protocol_parser = self.protocol_parser.clone();
                     
                     tokio::spawn(async move {
                         if let Err(e) = handle_connection(stream, message_handler, protocol_parser).await {
@@ -50,7 +50,7 @@ impl TcpAdapter {
 async fn handle_connection(
     mut stream: TcpStream,
     message_handler: Arc<dyn MessageHandler>,
-    protocol_parser: Arc<dyn ProtocolParser>,
+    protocol_parser: KafkaProtocolParser,
 ) -> Result<()> {
     println!("Accepted new connection");
     

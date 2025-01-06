@@ -3,6 +3,7 @@ use crate::ports::incoming::message_handler::MessageHandler;
 use crate::adapters::incoming::kafka_protocol_parser::KafkaProtocolParser;
 use crate::adapters::incoming::protocol::messages::{KafkaRequest, KafkaResponse};
 use crate::Result;
+use super::app_config::AppConfig;
 
 pub struct MockMessageHandler;
 
@@ -19,9 +20,9 @@ impl MessageHandler for MockMessageHandler {
     }
 }
 
-pub fn create_test_config() -> super::AppConfig {
-    super::AppConfig::with_custom_components(
-        Arc::new(MockMessageHandler::new()),
-        KafkaProtocolParser::new(),
-    )
+pub fn create_test_config() -> AppConfig {
+    AppConfig {
+        broker: Arc::new(MockMessageHandler::new()),
+        protocol_parser: KafkaProtocolParser::new(),
+    }
 } 
