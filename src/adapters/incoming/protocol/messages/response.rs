@@ -104,6 +104,25 @@ impl FetchResponse {
             responses: vec![],
         }
     }
+
+    pub fn unknown_topic(topic_id: [u8; 16]) -> Self {
+        Self {
+            throttle_time_ms: 0,
+            session_id: 0,
+            responses: vec![
+                FetchableTopicResponse {
+                    topic_id,
+                    partitions: vec![
+                        FetchablePartitionResponse {
+                            partition_index: 0,
+                            error_code: 100, // UNKNOWN_TOPIC
+                            high_watermark: 0,
+                        }
+                    ],
+                }
+            ],
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]

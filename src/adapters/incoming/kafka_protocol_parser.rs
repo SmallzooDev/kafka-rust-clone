@@ -4,8 +4,8 @@ use crate::adapters::incoming::protocol::constants::{
 };
 use crate::adapters::incoming::protocol::messages::{
     ApiVersion, ApiVersionsResponse, DescribeTopicPartitionsRequest, DescribeTopicPartitionsResponse,
-    FetchRequest, KafkaRequest, KafkaResponse, PartitionInfo, RequestHeader, RequestPayload, ResponsePayload, TopicRequest,
-    TopicResponse,
+    FetchRequest, FetchTopic, FetchPartition, ForgottenTopic, KafkaRequest, KafkaResponse, PartitionInfo,
+    RequestHeader, RequestPayload, ResponsePayload, TopicRequest, TopicResponse,
 };
 use crate::application::error::ApplicationError;
 use bytes::{Buf, BufMut, Bytes, BytesMut};
@@ -61,8 +61,81 @@ impl KafkaProtocolParser {
         let payload = match api_key {
             API_VERSIONS_KEY => RequestPayload::ApiVersions,
             FETCH_KEY => {
-                // 현재는 빈 요청만 처리
-                RequestPayload::Fetch(FetchRequest {})
+                // max_wait_ms
+                let max_wait_ms = buf.get_i32();
+                println!("[REQUEST] Max Wait MS: {}", max_wait_ms);
+                
+                // min_bytes
+                let min_bytes = buf.get_i32();
+                println!("[REQUEST] Min Bytes: {}", min_bytes);
+                
+                // max_bytes
+                let max_bytes = buf.get_i32();
+                println!("[REQUEST] Max Bytes: {}", max_bytes);
+                
+                // isolation_level
+                let isolation_level = buf.get_i8();
+                println!("[REQUEST] Isolation Level: {}", isolation_level);
+                
+                // session_id
+                let session_id = buf.get_i32();
+                println!("[REQUEST] Session ID: {}", session_id);
+                
+                // session_epoch
+                let session_epoch = buf.get_i32();
+                println!("[REQUEST] Session Epoch: {}", session_epoch);
+                
+                // topics array length (COMPACT_ARRAY)
+                let topics_length = buf.get_i8() - 1;
+                println!("[REQUEST] Topics Length: {}", topics_length);
+                
+                let mut topics = Vec::new();
+                for _ in 0..topics_length {
+                    // topic_id
+                    let mut topic_id = [0u8; 16];
+                    topic_id.copy_from_slice(&buf.copy_to_bytes(16));
+                    println!("[REQUEST] Topic ID: {:02x?}", topic_id);
+                    
+                    // partitions array length (COMPACT_ARRAY)
+                    let partitions_length = buf.get_i8() - 1;
+                    println!("[REQUEST] Partitions Length: {}", partitions_length);
+                    
+                    let mut partitions = Vec::new();
+                    for _ in 0..partitions_length {
+                        let partition = buf.get_i32();
+                        let current_leader_epoch = buf.get_i32();
+                        let fetch_offset = buf.get_i64();
+                        let last_fetched_epoch = buf.get_i32();
+                        let log_start_offset = buf.get_i64();
+                        let partition_max_bytes = buf.get_i32();
+                        
+                        partitions.push(FetchPartition {
+                            partition,
+                            current_leader_epoch,
+                            fetch_offset,
+                            last_fetched_epoch,
+                            log_start_offset,
+                            partition_max_bytes,
+                        });
+                    }
+                    
+                    buf.get_u8(); // TAG_BUFFER
+                    
+                    topics.push(FetchTopic {
+                        topic_id,
+                        partitions,
+                    });
+                }
+                
+                RequestPayload::Fetch(FetchRequest {
+                    max_wait_ms,
+                    min_bytes,
+                    max_bytes,
+                    isolation_level,
+                    session_id,
+                    session_epoch,
+                    topics,
+                })
             },
             DESCRIBE_TOPIC_PARTITIONS_KEY => {
                 let mut array_length_buf = [0u8; 8];
@@ -238,17 +311,65 @@ impl KafkaProtocolParser {
                 buf.put_i8(0);  // TAG_BUFFER for entire response
             }
             ResponsePayload::Fetch(fetch_response) => {
+                // TAG_BUFFER
+                buf.put_u8(0);
+                
                 // throttle_time_ms
                 buf.put_i32(fetch_response.throttle_time_ms);
+                
+                // error_code
+                buf.put_u16(response.error_code as u16);
                 
                 // session_id
                 buf.put_i32(fetch_response.session_id);
                 
-                // responses array length
-                buf.put_i32(0);  // empty array
+                // responses array length (COMPACT_ARRAY)
+                buf.put_i8((fetch_response.responses.len() + 1) as i8);
                 
-                // TAG_BUFFER (TAGGED_FIELD_ARRAY with UNSIGNED_VARINT)
-                buf.put_i8(0);  // array length = 0
+                // Write each topic response
+                for topic in &fetch_response.responses {
+                    // topic_id
+                    buf.put_slice(&topic.topic_id);
+                    
+                    // partitions array length (COMPACT_ARRAY)
+                    buf.put_i8(2); // partition length + 1
+                    
+                    // Write each partition
+                    for partition in &topic.partitions {
+                        // partition_index
+                        buf.put_i32(partition.partition_index);
+                        
+                        // error_code
+                        buf.put_u16(partition.error_code as u16);
+                        
+                        // high_watermark
+                        buf.put_i64(partition.high_watermark);
+                        
+                        // last_stable_offset
+                        buf.put_i64(0);
+                        
+                        // log_start_offset
+                        buf.put_i64(0);
+                        
+                        // aborted_transactions length + 1
+                        buf.put_u8(1);
+                        
+                        // preferred_read_replica
+                        buf.put_i32(0);
+                        
+                        // COMPACT_RECORDS
+                        buf.put_u8(1);
+                        
+                        // TAG_BUFFER
+                        buf.put_u8(0);
+                    }
+                    
+                    // TAG_BUFFER
+                    buf.put_u8(0);
+                }
+                
+                // TAG_BUFFER
+                buf.put_u8(0);
             }
         }
         

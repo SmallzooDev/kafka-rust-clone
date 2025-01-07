@@ -36,7 +36,35 @@ pub struct DescribeTopicPartitionsRequest {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct FetchRequest {
-    // 현재는 빈 요청만 처리하므로 필드가 필요 없음
+    pub max_wait_ms: i32,
+    pub min_bytes: i32,
+    pub max_bytes: i32,
+    pub isolation_level: i8,
+    pub session_id: i32,
+    pub session_epoch: i32,
+    pub topics: Vec<FetchTopic>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct FetchTopic {
+    pub topic_id: [u8; 16],
+    pub partitions: Vec<FetchPartition>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct FetchPartition {
+    pub partition: i32,
+    pub current_leader_epoch: i32,
+    pub fetch_offset: i64,
+    pub last_fetched_epoch: i32,
+    pub log_start_offset: i64,
+    pub partition_max_bytes: i32,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ForgottenTopic {
+    pub topic_id: [u8; 16],
+    pub partitions: Vec<i32>,
 }
 
 #[derive(Debug, Clone, PartialEq)]

@@ -54,12 +54,21 @@ impl MessageHandler for KafkaBroker {
             }
             FETCH_KEY => {
                 match &request.payload {
-                    RequestPayload::Fetch(_) => {
-                        Ok(KafkaResponse::new(
-                            request.header.correlation_id,
-                            0,
-                            ResponsePayload::Fetch(FetchResponse::empty()),
-                        ))
+                    RequestPayload::Fetch(fetch_request) => {
+                        // 첫 번째 토픽의 topic_id를 사용하여 응답 생성
+                        if let Some(first_topic) = fetch_request.topics.first() {
+                            Ok(KafkaResponse::new(
+                                request.header.correlation_id,
+                                0,
+                                ResponsePayload::Fetch(FetchResponse::unknown_topic(first_topic.topic_id)),
+                            ))
+                        } else {
+                            Ok(KafkaResponse::new(
+                                request.header.correlation_id,
+                                0,
+                                ResponsePayload::Fetch(FetchResponse::empty()),
+                            ))
+                        }
                     }
                     _ => unreachable!(),
                 }
