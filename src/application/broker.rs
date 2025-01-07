@@ -30,12 +30,114 @@ impl KafkaBroker {
             metadata_store,
         }
     }
+
+    fn convert_topic_id_to_uuid(topic_id: &[u8]) -> String {
+        let topic_id_hex = hex::encode(topic_id);
+        format!(
+            "{}-{}-{}-{}-{}",
+            &topic_id_hex[0..8],
+            &topic_id_hex[8..12],
+            &topic_id_hex[12..16],
+            &topic_id_hex[16..20],
+            &topic_id_hex[20..32]
+        )
+    }
+
+    async fn handle_fetch_request(&self, request: &KafkaRequest, fetch_request: &RequestPayload) -> Result<KafkaResponse> {
+        if let RequestPayload::Fetch(fetch_request) = fetch_request {
+            match fetch_request.topics.first() {
+                Some(first_topic) => {
+                    let topic_id = Self::convert_topic_id_to_uuid(&first_topic.topic_id);
+                    let topic_metadata = self.metadata_store.get_topic_metadata_by_ids(vec![topic_id]).await?;
+                    
+                    let response = match topic_metadata {
+                        Some(metadata_list) => {
+                            let metadata = metadata_list.first().unwrap();
+                            if metadata.error_code == i16::from(ErrorCode::UnknownTopicOrPartition) {
+                                FetchResponse::unknown_topic(first_topic.topic_id)
+                            } else {
+                                FetchResponse::empty_topic(first_topic.topic_id)
+                            }
+                        },
+                        None => FetchResponse::unknown_topic(first_topic.topic_id),
+                    };
+
+                    Ok(KafkaResponse::new(
+                        request.header.correlation_id,
+                        0,
+                        ResponsePayload::Fetch(response),
+                    ))
+                }
+                None => Ok(KafkaResponse::new(
+                    request.header.correlation_id,
+                    0,
+                    ResponsePayload::Fetch(FetchResponse::empty()),
+                ))
+            }
+        } else {
+            unreachable!()
+        }
+    }
+
+    async fn handle_describe_topic_partitions(&self, request: &KafkaRequest, describe_request: &RequestPayload) -> Result<KafkaResponse> {
+        if let RequestPayload::DescribeTopicPartitions(req) = describe_request {
+            let topic_names: Vec<String> = req.topics.iter()
+                .map(|t| t.topic_name.clone())
+                .collect();
+            
+            let topic_metadata = self.metadata_store.get_topic_metadata_by_names(topic_names.clone()).await?;
+            
+            let topics = match topic_metadata {
+                Some(metadata_list) => metadata_list.into_iter()
+                    .map(|metadata| self.create_topic_response(metadata))
+                    .collect(),
+                None => topic_names.into_iter()
+                    .map(|topic_name| TopicResponse {
+                        topic_name,
+                        topic_id: [0; 16],
+                        error_code: UNKNOWN_TOPIC_OR_PARTITION,
+                        is_internal: false,
+                        partitions: vec![],
+                    })
+                    .collect(),
+            };
+
+            Ok(KafkaResponse::new(
+                request.header.correlation_id,
+                0,
+                ResponsePayload::DescribeTopicPartitions(
+                    DescribeTopicPartitionsResponse { topics }
+                ),
+            ))
+        } else {
+            unreachable!()
+        }
+    }
+
+    fn create_topic_response(&self, metadata: TopicMetadata) -> TopicResponse {
+        let topic_id_bytes = hex::decode(metadata.topic_id.replace("-", ""))
+            .unwrap_or(vec![0; 16]);
+        let mut topic_id = [0u8; 16];
+        topic_id.copy_from_slice(&topic_id_bytes);
+
+        TopicResponse {
+            topic_name: metadata.name,
+            topic_id,
+            error_code: metadata.error_code,
+            is_internal: false,
+            partitions: metadata.partitions.iter()
+                .map(|p| PartitionInfo {
+                    partition_id: p.partition_index as i32,
+                    error_code: p.error_code,
+                })
+                .collect(),
+        }
+    }
 }
 
 #[async_trait]
 impl MessageHandler for KafkaBroker {
     async fn handle_request(&self, request: KafkaRequest) -> Result<KafkaResponse> {
-        // 버전 검증
         if !request.header.is_supported_version() {
             return Ok(KafkaResponse::new(
                 request.header.correlation_id,
@@ -44,139 +146,14 @@ impl MessageHandler for KafkaBroker {
             ));
         }
 
-        // 정상적인 요청 처리
         match request.header.api_key {
-            API_VERSIONS_KEY => {
-                Ok(KafkaResponse::new(
-                    request.header.correlation_id,
-                    0,
-                    ResponsePayload::ApiVersions(ApiVersionsResponse::default()),
-                ))
-            }
-            FETCH_KEY => {
-                match &request.payload {
-                    RequestPayload::Fetch(fetch_request) => {
-                        // 첫 번째 토픽의 topic_id를 사용하여 응답 생성
-                        if let Some(first_topic) = fetch_request.topics.first() {
-                            // 토픽 ID를 UUID 문자열로 변환
-                            let topic_id_hex = hex::encode(first_topic.topic_id);
-                            let topic_id = format!(
-                                "{}-{}-{}-{}-{}",
-                                &topic_id_hex[0..8],
-                                &topic_id_hex[8..12],
-                                &topic_id_hex[12..16],
-                                &topic_id_hex[16..20],
-                                &topic_id_hex[20..32]
-                            );
-                            
-                            let topic_metadata = self.metadata_store.get_topic_metadata_by_ids(vec![topic_id]).await?;
-                            println!("[BROKER] Got topic metadata: {:?}", topic_metadata);
-                            match topic_metadata {
-                                Some(metadata_list) => {
-                                    if let Some(metadata) = metadata_list.first() {
-                                        if metadata.error_code == i16::from(ErrorCode::UnknownTopicOrPartition) {
-                                            println!("[BROKER] Topic not found, returning unknown_topic");
-                                            Ok(KafkaResponse::new(
-                                                request.header.correlation_id,
-                                                0,
-                                                ResponsePayload::Fetch(FetchResponse::unknown_topic(first_topic.topic_id)),
-                                            ))
-                                        } else {
-                                            println!("[BROKER] Topic found, returning empty_topic");
-                                            Ok(KafkaResponse::new(
-                                                request.header.correlation_id,
-                                                0,
-                                                ResponsePayload::Fetch(FetchResponse::empty_topic(first_topic.topic_id)),
-                                            ))
-                                        }
-                                    } else {
-                                        println!("[BROKER] No metadata found, returning unknown_topic");
-                                        Ok(KafkaResponse::new(
-                                            request.header.correlation_id,
-                                            0,
-                                            ResponsePayload::Fetch(FetchResponse::unknown_topic(first_topic.topic_id)),
-                                        ))
-                                    }
-                                },
-                                None => {
-                                    println!("[BROKER] No metadata found, returning unknown_topic");
-                                    Ok(KafkaResponse::new(
-                                        request.header.correlation_id,
-                                        0,
-                                        ResponsePayload::Fetch(FetchResponse::unknown_topic(first_topic.topic_id)),
-                                    ))
-                                }
-                            }
-                        } else {
-                            Ok(KafkaResponse::new(
-                                request.header.correlation_id,
-                                0,
-                                ResponsePayload::Fetch(FetchResponse::empty()),
-                            ))
-                        }
-                    }
-                    _ => unreachable!(),
-                }
-            }
-            DESCRIBE_TOPIC_PARTITIONS_KEY => {
-                match &request.payload {
-                    RequestPayload::DescribeTopicPartitions(req) => {
-                        // 메타데이터 스토어에서 토픽 정보 조회
-                        let topic_names: Vec<String> = req.topics.iter()
-                            .map(|t| t.topic_name.clone())
-                            .collect();
-                        
-                        let topic_metadata = self.metadata_store.get_topic_metadata_by_names(topic_names.clone()).await?;
-                        
-                        let topics = match topic_metadata {
-                            Some(metadata_list) => {
-                                metadata_list.into_iter().map(|metadata| {
-                                    let partitions = metadata.partitions.iter()
-                                        .map(|p| PartitionInfo {
-                                            partition_id: p.partition_index as i32,
-                                            error_code: p.error_code,
-                                        })
-                                        .collect();
-
-                                    let topic_id_bytes = hex::decode(metadata.topic_id.replace("-", ""))
-                                        .unwrap_or(vec![0; 16]);
-                                    let mut topic_id = [0u8; 16];
-                                    topic_id.copy_from_slice(&topic_id_bytes);
-
-                                    TopicResponse {
-                                        topic_name: metadata.name,
-                                        topic_id,
-                                        error_code: metadata.error_code,
-                                        is_internal: false,
-                                        partitions,
-                                    }
-                                }).collect()
-                            }
-                            None => {
-                                // 토픽이 존재하지 않는 경우
-                                topic_names.into_iter().map(|topic_name| {
-                                    TopicResponse {
-                                        topic_name,
-                                        topic_id: [0; 16],
-                                        error_code: UNKNOWN_TOPIC_OR_PARTITION,
-                                        is_internal: false,
-                                        partitions: vec![],
-                                    }
-                                }).collect()
-                            }
-                        };
-
-                        Ok(KafkaResponse::new(
-                            request.header.correlation_id,
-                            0,
-                            ResponsePayload::DescribeTopicPartitions(
-                                DescribeTopicPartitionsResponse { topics }
-                            ),
-                        ))
-                    }
-                    _ => unreachable!(),
-                }
-            }
+            API_VERSIONS_KEY => Ok(KafkaResponse::new(
+                request.header.correlation_id,
+                0,
+                ResponsePayload::ApiVersions(ApiVersionsResponse::default()),
+            )),
+            FETCH_KEY => self.handle_fetch_request(&request, &request.payload).await,
+            DESCRIBE_TOPIC_PARTITIONS_KEY => self.handle_describe_topic_partitions(&request, &request.payload).await,
             _ => Ok(KafkaResponse::new(
                 request.header.correlation_id,
                 0,
