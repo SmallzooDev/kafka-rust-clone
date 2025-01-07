@@ -1,6 +1,7 @@
 use crate::adapters::incoming::protocol::constants::{
     API_VERSIONS_KEY,
     DESCRIBE_TOPIC_PARTITIONS_KEY,
+    FETCH_KEY,
 };
 
 #[derive(Debug, Clone, PartialEq)]
@@ -26,6 +27,11 @@ impl ApiVersionsResponse {
                 api_key: API_VERSIONS_KEY,
                 min_version: 0,
                 max_version: 4,
+            },
+            ApiVersion {
+                api_key: FETCH_KEY,
+                min_version: 0,
+                max_version: 16,
             },
             ApiVersion {
                 api_key: DESCRIBE_TOPIC_PARTITIONS_KEY,
