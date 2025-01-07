@@ -26,7 +26,7 @@ impl KraftMetadataStore {
 
 #[async_trait]
 impl MetadataStore for KraftMetadataStore {
-    async fn get_topic_metadata(&self, requested_topics: Vec<String>) -> Result<Option<TopicMetadata>, ApplicationError> {
+    async fn get_topic_metadata(&self, requested_topics: Vec<String>) -> Result<Option<Vec<TopicMetadata>>, ApplicationError> {
         let path = self.get_metadata_log_path();
         let content = read(&path).await.map_err(ApplicationError::Io)?;
         let mut data = BytesMut::with_capacity(content.len());
@@ -34,9 +34,6 @@ impl MetadataStore for KraftMetadataStore {
         let mut data = data.freeze();
 
         let mut topics = Vec::new();
-        let mut topic_id =  "00000000-0000-0000-0000-000000000000".to_string();
-        let mut topic_error_code = ErrorCode::UnknownTopicOrPartition;
-        let topic_authorized_operations = 0x0DF;
 
         println!("[DEBUG] Requested topics: {:?}", requested_topics);
 
@@ -45,7 +42,7 @@ impl MetadataStore for KraftMetadataStore {
             println!("[DEBUG] Processing record batch with {} records", record_batch.records.len());
 
             for topic_name in &requested_topics {
-                topic_id =  "00000000-0000-0000-0000-000000000000".to_string();
+                let mut topic_id =  "00000000-0000-0000-0000-000000000000".to_string();
                 let mut partitions = Vec::new();
 
                 // find topic id and partition info in the records
@@ -59,7 +56,6 @@ impl MetadataStore for KraftMetadataStore {
                         _ => None,
                     } {
                         topic_id = id;
-                        topic_error_code = ErrorCode::None;
                     };
 
                     match record_type {
@@ -83,12 +79,12 @@ impl MetadataStore for KraftMetadataStore {
 
                 if !partitions.is_empty() {
                     let topic = TopicMetadata {
-                        error_code: i16::from(topic_error_code),
+                        error_code: i16::from(ErrorCode::None),
                         name: topic_name.to_string(),
                         topic_id: topic_id.clone(),
                         is_internal: false,
                         partitions,
-                        topic_authorized_operations,
+                        topic_authorized_operations: 0x0DF,
                     };
                     println!("[DEBUG] Created topic metadata for {}: {:?}", topic_name, topic);
                     topics.push(topic);
@@ -107,10 +103,10 @@ impl MetadataStore for KraftMetadataStore {
                 let error_topic = TopicMetadata {
                     error_code: i16::from(ErrorCode::UnknownTopicOrPartition),
                     name: requested_topic.to_string(),
-                    topic_id: topic_id.clone(),
+                    topic_id: "00000000-0000-0000-0000-000000000000".to_string(),
                     is_internal: false,
                     partitions: Vec::new(),
-                    topic_authorized_operations,
+                    topic_authorized_operations: 0x0DF,
                 };
                 println!("[DEBUG] Created error topic metadata for {}: {:?}", requested_topic, error_topic);
                 topics.push(error_topic);
@@ -121,8 +117,8 @@ impl MetadataStore for KraftMetadataStore {
             println!("[DEBUG] No topics found");
             Ok(None)
         } else {
-            println!("[DEBUG] Returning topic metadata: {:?}", topics[0]);
-            Ok(Some(topics[0].clone()))
+            println!("[DEBUG] Returning topic metadata: {:?}", topics);
+            Ok(Some(topics))
         }
     }
 }

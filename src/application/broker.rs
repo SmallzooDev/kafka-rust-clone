@@ -6,7 +6,7 @@ use async_trait::async_trait;
 use crate::adapters::incoming::protocol::messages::{
     KafkaRequest, KafkaResponse, ApiVersionsResponse, ResponsePayload,
     RequestPayload, DescribeTopicPartitionsResponse, PartitionInfo, ErrorCode,
-    RequestHeader, KafkaMessage,
+    RequestHeader, KafkaMessage, TopicRequest, TopicResponse,
 };
 use crate::domain::message::TopicMetadata;
 use crate::adapters::incoming::protocol::constants::{
@@ -55,54 +55,57 @@ impl MessageHandler for KafkaBroker {
                 match &request.payload {
                     RequestPayload::DescribeTopicPartitions(req) => {
                         // 메타데이터 스토어에서 토픽 정보 조회
-                        let topic_metadata = self.metadata_store.get_topic_metadata(vec![req.topic_name.clone()]).await?;
+                        let topic_names: Vec<String> = req.topics.iter()
+                            .map(|t| t.topic_name.clone())
+                            .collect();
                         
-                        match topic_metadata {
-                            Some(metadata) => {
-                                // 토픽이 존재하는 경우
-                                let partitions = metadata.partitions.iter()
-                                    .map(|p| PartitionInfo {
-                                        partition_id: p.partition_index as i32,
-                                        error_code: p.error_code,
-                                    })
-                                    .collect();
+                        let topic_metadata = self.metadata_store.get_topic_metadata(topic_names.clone()).await?;
+                        
+                        let topics = match topic_metadata {
+                            Some(metadata_list) => {
+                                metadata_list.into_iter().map(|metadata| {
+                                    let partitions = metadata.partitions.iter()
+                                        .map(|p| PartitionInfo {
+                                            partition_id: p.partition_index as i32,
+                                            error_code: p.error_code,
+                                        })
+                                        .collect();
 
-                                let topic_id_bytes = hex::decode(metadata.topic_id.replace("-", ""))
-                                    .unwrap_or(vec![0; 16]);
-                                let mut topic_id = [0u8; 16];
-                                topic_id.copy_from_slice(&topic_id_bytes);
+                                    let topic_id_bytes = hex::decode(metadata.topic_id.replace("-", ""))
+                                        .unwrap_or(vec![0; 16]);
+                                    let mut topic_id = [0u8; 16];
+                                    topic_id.copy_from_slice(&topic_id_bytes);
 
-                                Ok(KafkaResponse::new(
-                                    request.header.correlation_id,
-                                    0,
-                                    ResponsePayload::DescribeTopicPartitions(
-                                        DescribeTopicPartitionsResponse {
-                                            topic_name: req.topic_name.clone(),
-                                            topic_id,
-                                            error_code: metadata.error_code as i16,
-                                            is_internal: false,
-                                            partitions,
-                                        }
-                                    ),
-                                ))
+                                    TopicResponse {
+                                        topic_name: metadata.name,
+                                        topic_id,
+                                        error_code: metadata.error_code,
+                                        is_internal: false,
+                                        partitions,
+                                    }
+                                }).collect()
                             }
                             None => {
                                 // 토픽이 존재하지 않는 경우
-                                Ok(KafkaResponse::new(
-                                    request.header.correlation_id,
-                                    0,
-                                    ResponsePayload::DescribeTopicPartitions(
-                                        DescribeTopicPartitionsResponse {
-                                            topic_name: req.topic_name.clone(),
-                                            topic_id: [0; 16],
-                                            error_code: UNKNOWN_TOPIC_OR_PARTITION,
-                                            is_internal: false,
-                                            partitions: vec![],
-                                        }
-                                    ),
-                                ))
+                                topic_names.into_iter().map(|topic_name| {
+                                    TopicResponse {
+                                        topic_name,
+                                        topic_id: [0; 16],
+                                        error_code: UNKNOWN_TOPIC_OR_PARTITION,
+                                        is_internal: false,
+                                        partitions: vec![],
+                                    }
+                                }).collect()
                             }
-                        }
+                        };
+
+                        Ok(KafkaResponse::new(
+                            request.header.correlation_id,
+                            0,
+                            ResponsePayload::DescribeTopicPartitions(
+                                DescribeTopicPartitionsResponse { topics }
+                            ),
+                        ))
                     }
                     _ => unreachable!(),
                 }
@@ -144,10 +147,18 @@ mod tests {
 
     #[async_trait]
     impl MetadataStore for MockMetadataStore {
-        async fn get_topic_metadata(&self, topic_names: Vec<String>) -> Result<Option<TopicMetadata>> {
-            Ok(self.topics.iter()
-                .find(|t| topic_names.contains(&t.name))
-                .cloned())
+        async fn get_topic_metadata(&self, topic_names: Vec<String>) -> Result<Option<Vec<TopicMetadata>>> {
+            let mut result = Vec::new();
+            for topic_name in topic_names {
+                if let Some(topic) = self.topics.iter().find(|t| t.name == topic_name) {
+                    result.push(topic.clone());
+                }
+            }
+            if result.is_empty() {
+                Ok(None)
+            } else {
+                Ok(Some(result))
+            }
         }
     }
 
@@ -177,8 +188,10 @@ mod tests {
             },
             RequestPayload::DescribeTopicPartitions(
                 DescribeTopicPartitionsRequest {
-                    topic_name: "test-topic".to_string(),
-                    partitions: vec![],
+                    topics: vec![TopicRequest {
+                        topic_name: "test-topic".to_string(),
+                        partitions: vec![],
+                    }],
                 }
             ),
         );
@@ -189,11 +202,12 @@ mod tests {
 
         match response.payload {
             ResponsePayload::DescribeTopicPartitions(resp) => {
-                assert_eq!(resp.topic_name, "test-topic");
+                assert_eq!(resp.topics.len(), 1);
+                assert_eq!(resp.topics[0].topic_name, "test-topic");
                 let expected_topic_id = hex::decode(topic_id.replace("-", "")).unwrap();
-                assert_eq!(&resp.topic_id[..], &expected_topic_id[..]);
-                assert_eq!(resp.error_code, 0);
-                assert_eq!(resp.partitions.len(), 0);
+                assert_eq!(&resp.topics[0].topic_id[..], &expected_topic_id[..]);
+                assert_eq!(resp.topics[0].error_code, 0);
+                assert_eq!(resp.topics[0].partitions.len(), 0);
             }
             _ => panic!("Expected DescribeTopicPartitions response"),
         }
@@ -217,8 +231,10 @@ mod tests {
             },
             RequestPayload::DescribeTopicPartitions(
                 DescribeTopicPartitionsRequest {
-                    topic_name: "test-topic".to_string(),
-                    partitions: vec![],
+                    topics: vec![TopicRequest {
+                        topic_name: "test-topic".to_string(),
+                        partitions: vec![],
+                    }],
                 }
             ),
         );
@@ -229,10 +245,11 @@ mod tests {
 
         match response.payload {
             ResponsePayload::DescribeTopicPartitions(resp) => {
-                assert_eq!(resp.topic_name, "test-topic");
-                assert_eq!(resp.topic_id, [0u8; 16]);
-                assert_eq!(resp.error_code, UNKNOWN_TOPIC_OR_PARTITION);
-                assert_eq!(resp.partitions.len(), 0);
+                assert_eq!(resp.topics.len(), 1);
+                assert_eq!(resp.topics[0].topic_name, "test-topic");
+                assert_eq!(resp.topics[0].topic_id, [0u8; 16]);
+                assert_eq!(resp.topics[0].error_code, UNKNOWN_TOPIC_OR_PARTITION);
+                assert_eq!(resp.topics[0].partitions.len(), 0);
             }
             _ => panic!("Expected DescribeTopicPartitions response"),
         }

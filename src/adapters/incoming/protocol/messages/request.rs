@@ -22,9 +22,14 @@ impl RequestHeader {
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub struct DescribeTopicPartitionsRequest {
+pub struct TopicRequest {
     pub topic_name: String,
     pub partitions: Vec<i32>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct DescribeTopicPartitionsRequest {
+    pub topics: Vec<TopicRequest>,
 }
 
 #[derive(Debug, Clone, PartialEq)]

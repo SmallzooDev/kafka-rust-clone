@@ -37,12 +37,17 @@ impl ApiVersionsResponse {
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub struct DescribeTopicPartitionsResponse {
+pub struct TopicResponse {
     pub topic_name: String,
     pub topic_id: [u8; 16],  // UUID as 16 bytes
     pub error_code: i16,     // topic level error code
     pub is_internal: bool,   // is_internal flag
     pub partitions: Vec<PartitionInfo>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct DescribeTopicPartitionsResponse {
+    pub topics: Vec<TopicResponse>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -54,11 +59,13 @@ pub struct PartitionInfo {
 impl DescribeTopicPartitionsResponse {
     pub fn new_unknown_topic(topic_name: String) -> Self {
         Self {
-            topic_name,
-            topic_id: [0; 16],  // 00000000-0000-0000-0000-000000000000
-            error_code: 3,      // UNKNOWN_TOPIC_OR_PARTITION
-            is_internal: false, // external topic
-            partitions: vec![],
+            topics: vec![TopicResponse {
+                topic_name,
+                topic_id: [0; 16],  // 00000000-0000-0000-0000-000000000000
+                error_code: 3,      // UNKNOWN_TOPIC_OR_PARTITION
+                is_internal: false, // external topic
+                partitions: vec![],
+            }],
         }
     }
 }
