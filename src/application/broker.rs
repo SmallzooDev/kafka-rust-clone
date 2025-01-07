@@ -12,6 +12,7 @@ use crate::domain::message::TopicMetadata;
 use crate::ports::incoming::message_handler::MessageHandler;
 use crate::ports::outgoing::message_store::MessageStore;
 use crate::ports::outgoing::metadata_store::MetadataStore;
+use crate::application::error::ApplicationError;
 use crate::Result;
 use async_trait::async_trait;
 use hex;
@@ -57,11 +58,55 @@ impl MessageHandler for KafkaBroker {
                     RequestPayload::Fetch(fetch_request) => {
                         // 첫 번째 토픽의 topic_id를 사용하여 응답 생성
                         if let Some(first_topic) = fetch_request.topics.first() {
-                            Ok(KafkaResponse::new(
-                                request.header.correlation_id,
-                                0,
-                                ResponsePayload::Fetch(FetchResponse::unknown_topic(first_topic.topic_id)),
-                            ))
+                            // 토픽 ID를 UUID 문자열로 변환
+                            let topic_id_hex = hex::encode(first_topic.topic_id);
+                            let topic_id = format!(
+                                "{}-{}-{}-{}-{}",
+                                &topic_id_hex[0..8],
+                                &topic_id_hex[8..12],
+                                &topic_id_hex[12..16],
+                                &topic_id_hex[16..20],
+                                &topic_id_hex[20..32]
+                            );
+                            
+                            let topic_metadata = self.metadata_store.get_topic_metadata_by_ids(vec![topic_id]).await?;
+                            println!("[BROKER] Got topic metadata: {:?}", topic_metadata);
+                            match topic_metadata {
+                                Some(metadata_list) => {
+                                    if let Some(metadata) = metadata_list.first() {
+                                        if metadata.error_code == i16::from(ErrorCode::UnknownTopicOrPartition) {
+                                            println!("[BROKER] Topic not found, returning unknown_topic");
+                                            Ok(KafkaResponse::new(
+                                                request.header.correlation_id,
+                                                0,
+                                                ResponsePayload::Fetch(FetchResponse::unknown_topic(first_topic.topic_id)),
+                                            ))
+                                        } else {
+                                            println!("[BROKER] Topic found, returning empty_topic");
+                                            Ok(KafkaResponse::new(
+                                                request.header.correlation_id,
+                                                0,
+                                                ResponsePayload::Fetch(FetchResponse::empty_topic(first_topic.topic_id)),
+                                            ))
+                                        }
+                                    } else {
+                                        println!("[BROKER] No metadata found, returning unknown_topic");
+                                        Ok(KafkaResponse::new(
+                                            request.header.correlation_id,
+                                            0,
+                                            ResponsePayload::Fetch(FetchResponse::unknown_topic(first_topic.topic_id)),
+                                        ))
+                                    }
+                                },
+                                None => {
+                                    println!("[BROKER] No metadata found, returning unknown_topic");
+                                    Ok(KafkaResponse::new(
+                                        request.header.correlation_id,
+                                        0,
+                                        ResponsePayload::Fetch(FetchResponse::unknown_topic(first_topic.topic_id)),
+                                    ))
+                                }
+                            }
                         } else {
                             Ok(KafkaResponse::new(
                                 request.header.correlation_id,
@@ -81,7 +126,7 @@ impl MessageHandler for KafkaBroker {
                             .map(|t| t.topic_name.clone())
                             .collect();
                         
-                        let topic_metadata = self.metadata_store.get_topic_metadata(topic_names.clone()).await?;
+                        let topic_metadata = self.metadata_store.get_topic_metadata_by_names(topic_names.clone()).await?;
                         
                         let topics = match topic_metadata {
                             Some(metadata_list) => {
@@ -168,10 +213,24 @@ mod tests {
 
     #[async_trait]
     impl MetadataStore for MockMetadataStore {
-        async fn get_topic_metadata(&self, topic_names: Vec<String>) -> Result<Option<Vec<TopicMetadata>>> {
+        async fn get_topic_metadata_by_names(&self, topic_names: Vec<String>) -> Result<Option<Vec<TopicMetadata>>> {
             let mut result = Vec::new();
             for topic_name in topic_names {
                 if let Some(topic) = self.topics.iter().find(|t| t.name == topic_name) {
+                    result.push(topic.clone());
+                }
+            }
+            if result.is_empty() {
+                Ok(None)
+            } else {
+                Ok(Some(result))
+            }
+        }
+
+        async fn get_topic_metadata_by_ids(&self, topic_ids: Vec<String>) -> Result<Option<Vec<TopicMetadata>>> {
+            let mut result = Vec::new();
+            for topic_id in topic_ids {
+                if let Some(topic) = self.topics.iter().find(|t| t.topic_id == topic_id) {
                     result.push(topic.clone());
                 }
             }
