@@ -7,6 +7,7 @@ use crate::adapters::incoming::protocol::messages::{
     ApiVersionsResponse, DescribeTopicPartitionsResponse, ErrorCode, FetchResponse,
     KafkaMessage, KafkaRequest, KafkaResponse, PartitionInfo,
     RequestHeader, RequestPayload, ResponsePayload, TopicRequest, TopicResponse,
+    FetchableTopicResponse, FetchablePartitionResponse,
 };
 use crate::domain::message::TopicMetadata;
 use crate::ports::incoming::message_handler::MessageHandler;
@@ -48,7 +49,8 @@ impl KafkaBroker {
             match fetch_request.topics.first() {
                 Some(first_topic) => {
                     let topic_id = Self::convert_topic_id_to_uuid(&first_topic.topic_id);
-                    let topic_metadata = self.metadata_store.get_topic_metadata_by_ids(vec![topic_id]).await?;
+                    println!("[DEBUG] Looking for topic_id: {}", topic_id);
+                    let topic_metadata = self.metadata_store.get_topic_metadata_by_ids(vec![topic_id.clone()]).await?;
                     
                     let response = match topic_metadata {
                         Some(metadata_list) => {
@@ -56,7 +58,30 @@ impl KafkaBroker {
                             if metadata.error_code == i16::from(ErrorCode::UnknownTopicOrPartition) {
                                 FetchResponse::unknown_topic(first_topic.topic_id)
                             } else {
-                                FetchResponse::empty_topic(first_topic.topic_id)
+                                if let Some(partition) = first_topic.partitions.first() {
+                                    let records = self.message_store.read_messages(&metadata.name, partition.partition, partition.fetch_offset).await?;
+                                    println!("[DEBUG] Read records: {:?}", records.is_some());
+                                    
+                                    FetchResponse {
+                                        throttle_time_ms: 0,
+                                        session_id: 0,
+                                        responses: vec![
+                                            FetchableTopicResponse {
+                                                topic_id: first_topic.topic_id,
+                                                partitions: vec![
+                                                    FetchablePartitionResponse {
+                                                        partition_index: partition.partition,
+                                                        error_code: 0,
+                                                        high_watermark: 1,
+                                                        records,
+                                                    }
+                                                ],
+                                            }
+                                        ],
+                                    }
+                                } else {
+                                    FetchResponse::empty_topic(first_topic.topic_id)
+                                }
                             }
                         },
                         None => FetchResponse::unknown_topic(first_topic.topic_id),
@@ -175,6 +200,10 @@ mod tests {
     impl MessageStore for MockMessageStore {
         async fn store_message(&self, message: KafkaMessage) -> Result<()> {
             Ok(())
+        }
+
+        async fn read_messages(&self, _topic_id: &str, _partition: i32, _offset: i64) -> Result<Option<Vec<u8>>> {
+            Ok(None)
         }
     }
 

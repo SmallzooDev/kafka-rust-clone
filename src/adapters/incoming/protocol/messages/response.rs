@@ -94,6 +94,7 @@ pub struct FetchablePartitionResponse {
     pub partition_index: i32,
     pub error_code: i16,
     pub high_watermark: i64,
+    pub records: Option<Vec<u8>>,
 }
 
 impl FetchResponse {
@@ -117,6 +118,7 @@ impl FetchResponse {
                             partition_index: 0,
                             error_code: 0,  // No Error
                             high_watermark: 0,
+                            records: None,
                         }
                     ],
                 }
@@ -136,6 +138,7 @@ impl FetchResponse {
                             partition_index: 0,
                             error_code: 100, // UNKNOWN_TOPIC
                             high_watermark: 0,
+                            records: None,
                         }
                     ],
                 }

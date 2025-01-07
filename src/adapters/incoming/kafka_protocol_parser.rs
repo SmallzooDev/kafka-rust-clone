@@ -4,11 +4,25 @@ use crate::adapters::incoming::protocol::constants::{
 };
 use crate::adapters::incoming::protocol::messages::{
     ApiVersion, ApiVersionsResponse, DescribeTopicPartitionsRequest, DescribeTopicPartitionsResponse,
-    FetchRequest, FetchTopic, FetchPartition, ForgottenTopic, KafkaRequest, KafkaResponse, PartitionInfo,
+    FetchPartition, FetchRequest, FetchTopic, KafkaRequest, KafkaResponse, PartitionInfo,
     RequestHeader, RequestPayload, ResponsePayload, TopicRequest, TopicResponse,
 };
 use crate::application::error::ApplicationError;
 use bytes::{Buf, BufMut, Bytes, BytesMut};
+
+pub trait PutVarint {
+    fn put_uvarint(&mut self, num: i64);
+}
+
+impl PutVarint for Vec<u8> {
+    fn put_uvarint(&mut self, mut num: i64) {
+        while (num & !0x7F) != 0 {
+            self.push(((num & 0x7F) | 0x80) as u8);
+            num >>= 7;
+        }
+        self.push(num as u8);
+    }
+}
 
 #[derive(Clone)]
 pub struct KafkaProtocolParser;
@@ -311,65 +325,76 @@ impl KafkaProtocolParser {
                 buf.put_i8(0);  // TAG_BUFFER for entire response
             }
             ResponsePayload::Fetch(fetch_response) => {
-                // TAG_BUFFER
-                buf.put_u8(0);
-                
-                // throttle_time_ms
+                // TAG_BUFFER after header
+                buf.put_i8(0);
+
+                // Body
                 buf.put_i32(fetch_response.throttle_time_ms);
-                
-                // error_code
-                buf.put_u16(response.error_code as u16);
-                
-                // session_id
+                buf.put_i16(response.error_code);
                 buf.put_i32(fetch_response.session_id);
-                
+
                 // responses array length (COMPACT_ARRAY)
-                buf.put_i8((fetch_response.responses.len() + 1) as i8);
-                
+                let mut varint_buf = Vec::new();
+                varint_buf.put_uvarint((fetch_response.responses.len() as i64) + 1);
+                buf.put_slice(&varint_buf);
+
                 // Write each topic response
                 for topic in &fetch_response.responses {
                     // topic_id
                     buf.put_slice(&topic.topic_id);
-                    
+
                     // partitions array length (COMPACT_ARRAY)
-                    buf.put_i8(2); // partition length + 1
-                    
+                    let mut varint_buf = Vec::new();
+                    varint_buf.put_uvarint((topic.partitions.len() as i64) + 1);
+                    buf.put_slice(&varint_buf);
+
                     // Write each partition
                     for partition in &topic.partitions {
                         // partition_index
                         buf.put_i32(partition.partition_index);
-                        
+
                         // error_code
-                        buf.put_u16(partition.error_code as u16);
-                        
+                        buf.put_i16(partition.error_code);
+
                         // high_watermark
                         buf.put_i64(partition.high_watermark);
-                        
+
                         // last_stable_offset
                         buf.put_i64(0);
-                        
+
                         // log_start_offset
                         buf.put_i64(0);
-                        
-                        // aborted_transactions length + 1
-                        buf.put_u8(1);
-                        
+
+                        // aborted_transactions array (COMPACT_ARRAY)
+                        let mut varint_buf = Vec::new();
+                        varint_buf.put_uvarint(1);
+                        buf.put_slice(&varint_buf);
+
                         // preferred_read_replica
-                        buf.put_i32(0);
-                        
-                        // COMPACT_RECORDS
-                        buf.put_u8(1);
-                        
-                        // TAG_BUFFER
-                        buf.put_u8(0);
+                        buf.put_i32(-1);
+
+                        // records (COMPACT_RECORDS)
+                        if let Some(records) = &partition.records {
+                            let mut varint_buf = Vec::new();
+                            varint_buf.put_uvarint(2);
+                            buf.put_slice(&varint_buf);
+                            buf.put_slice(records);
+                        } else {
+                            let mut varint_buf = Vec::new();
+                            varint_buf.put_uvarint(1);
+                            buf.put_slice(&varint_buf);
+                        }
+
+                        // TAG_BUFFER for partition
+                        buf.put_i8(0);
                     }
-                    
-                    // TAG_BUFFER
-                    buf.put_u8(0);
+
+                    // TAG_BUFFER for topic
+                    buf.put_i8(0);
                 }
-                
-                // TAG_BUFFER
-                buf.put_u8(0);
+
+                // TAG_BUFFER for entire response
+                buf.put_i8(0);
             }
         }
         
