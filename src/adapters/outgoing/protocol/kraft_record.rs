@@ -421,7 +421,7 @@ impl CompactNullableBytes {
 impl VarInt {
     pub(crate) fn deserialize<T>(buf: &mut T) -> Result<i64, ApplicationError>
     where
-        T: bytes::Buf,
+        T: Buf,
     {
         const MAX_BYTES: usize = 10;
         if buf.remaining() == 0 {

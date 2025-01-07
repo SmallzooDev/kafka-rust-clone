@@ -1,11 +1,13 @@
-use crate::application::error::ApplicationError;
+use crate::adapters::incoming::protocol::constants::{
+    API_VERSIONS_KEY, DESCRIBE_TOPIC_PARTITIONS_KEY, FETCH_KEY, MAX_SUPPORTED_VERSION,
+    UNKNOWN_TOPIC_OR_PARTITION,
+};
 use crate::adapters::incoming::protocol::messages::{
     ApiVersion, ApiVersionsResponse, DescribeTopicPartitionsRequest, DescribeTopicPartitionsResponse,
-    KafkaRequest, KafkaResponse, RequestHeader, RequestPayload, ResponsePayload, PartitionInfo, TopicRequest, TopicResponse,
+    FetchRequest, KafkaRequest, KafkaResponse, PartitionInfo, RequestHeader, RequestPayload, ResponsePayload, TopicRequest,
+    TopicResponse,
 };
-use crate::adapters::incoming::protocol::constants::{
-    API_VERSIONS_KEY, DESCRIBE_TOPIC_PARTITIONS_KEY, MAX_SUPPORTED_VERSION, UNKNOWN_TOPIC_OR_PARTITION,
-};
+use crate::application::error::ApplicationError;
 use bytes::{Buf, BufMut, Bytes, BytesMut};
 
 #[derive(Clone)]
@@ -58,6 +60,10 @@ impl KafkaProtocolParser {
         
         let payload = match api_key {
             API_VERSIONS_KEY => RequestPayload::ApiVersions,
+            FETCH_KEY => {
+                // 현재는 빈 요청만 처리
+                RequestPayload::Fetch(FetchRequest {})
+            },
             DESCRIBE_TOPIC_PARTITIONS_KEY => {
                 let mut array_length_buf = [0u8; 8];
                 let mut pos = 0;
@@ -231,6 +237,19 @@ impl KafkaProtocolParser {
                 
                 buf.put_i8(0);  // TAG_BUFFER for entire response
             }
+            ResponsePayload::Fetch(fetch_response) => {
+                // throttle_time_ms
+                buf.put_i32(fetch_response.throttle_time_ms);
+                
+                // session_id
+                buf.put_i32(fetch_response.session_id);
+                
+                // responses array length
+                buf.put_i32(0);  // empty array
+                
+                // TAG_BUFFER (TAGGED_FIELD_ARRAY with UNSIGNED_VARINT)
+                buf.put_i8(0);  // array length = 0
+            }
         }
         
         let total_size = buf.len() as i32;
@@ -263,11 +282,11 @@ fn decode_varint(buf: &[u8]) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::adapters::incoming::protocol::messages::{
-        ApiVersion, ApiVersionsResponse, DescribeTopicPartitionsResponse, PartitionInfo
-    };
     use crate::adapters::incoming::protocol::constants::{
         MAX_SUPPORTED_VERSION, UNKNOWN_TOPIC_OR_PARTITION
+    };
+    use crate::adapters::incoming::protocol::messages::{
+        ApiVersion, ApiVersionsResponse, DescribeTopicPartitionsResponse, PartitionInfo
     };
 
     #[test]

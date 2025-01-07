@@ -1,6 +1,7 @@
 use crate::adapters::incoming::protocol::constants::{
     API_VERSIONS_KEY,
     DESCRIBE_TOPIC_PARTITIONS_KEY,
+    FETCH_KEY,
 };
 
 #[derive(Debug, Clone, PartialEq)]
@@ -15,6 +16,7 @@ impl RequestHeader {
     pub fn is_supported_version(&self) -> bool {
         match self.api_key {
             API_VERSIONS_KEY => self.api_version >= 0 && self.api_version <= 4,
+            FETCH_KEY => self.api_version == 16,
             DESCRIBE_TOPIC_PARTITIONS_KEY => self.api_version == 0,
             _ => false,
         }
@@ -33,9 +35,15 @@ pub struct DescribeTopicPartitionsRequest {
 }
 
 #[derive(Debug, Clone, PartialEq)]
+pub struct FetchRequest {
+    // 현재는 빈 요청만 처리하므로 필드가 필요 없음
+}
+
+#[derive(Debug, Clone, PartialEq)]
 pub enum RequestPayload {
     ApiVersions,
     DescribeTopicPartitions(DescribeTopicPartitionsRequest),
+    Fetch(FetchRequest),
 }
 
 #[derive(Debug, Clone)]

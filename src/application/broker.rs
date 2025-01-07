@@ -1,18 +1,19 @@
+use crate::adapters::incoming::protocol::constants::{
+    API_VERSIONS_KEY, DESCRIBE_TOPIC_PARTITIONS_KEY,
+    FETCH_KEY, UNKNOWN_TOPIC_OR_PARTITION,
+    UNSUPPORTED_VERSION,
+};
+use crate::adapters::incoming::protocol::messages::{
+    ApiVersionsResponse, DescribeTopicPartitionsResponse, ErrorCode, FetchResponse,
+    KafkaMessage, KafkaRequest, KafkaResponse, PartitionInfo,
+    RequestHeader, RequestPayload, ResponsePayload, TopicRequest, TopicResponse,
+};
+use crate::domain::message::TopicMetadata;
 use crate::ports::incoming::message_handler::MessageHandler;
 use crate::ports::outgoing::message_store::MessageStore;
 use crate::ports::outgoing::metadata_store::MetadataStore;
 use crate::Result;
 use async_trait::async_trait;
-use crate::adapters::incoming::protocol::messages::{
-    KafkaRequest, KafkaResponse, ApiVersionsResponse, ResponsePayload,
-    RequestPayload, DescribeTopicPartitionsResponse, PartitionInfo, ErrorCode,
-    RequestHeader, KafkaMessage, TopicRequest, TopicResponse,
-};
-use crate::domain::message::TopicMetadata;
-use crate::adapters::incoming::protocol::constants::{
-    API_VERSIONS_KEY, UNSUPPORTED_VERSION,
-    DESCRIBE_TOPIC_PARTITIONS_KEY, UNKNOWN_TOPIC_OR_PARTITION
-};
 use hex;
 
 #[allow(dead_code)]
@@ -50,6 +51,18 @@ impl MessageHandler for KafkaBroker {
                     0,
                     ResponsePayload::ApiVersions(ApiVersionsResponse::default()),
                 ))
+            }
+            FETCH_KEY => {
+                match &request.payload {
+                    RequestPayload::Fetch(_) => {
+                        Ok(KafkaResponse::new(
+                            request.header.correlation_id,
+                            0,
+                            ResponsePayload::Fetch(FetchResponse::empty()),
+                        ))
+                    }
+                    _ => unreachable!(),
+                }
             }
             DESCRIBE_TOPIC_PARTITIONS_KEY => {
                 match &request.payload {
@@ -122,10 +135,9 @@ impl MessageHandler for KafkaBroker {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::Arc;
-    use async_trait::async_trait;
-    use crate::adapters::incoming::protocol::messages::{RequestHeader, DescribeTopicPartitionsRequest, KafkaMessage};
+    use crate::adapters::incoming::protocol::messages::{DescribeTopicPartitionsRequest, KafkaMessage, RequestHeader};
     use crate::domain::message::TopicMetadata;
+    use async_trait::async_trait;
 
     struct MockMessageStore;
     #[async_trait]

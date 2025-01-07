@@ -77,9 +77,40 @@ impl DescribeTopicPartitionsResponse {
 }
 
 #[derive(Debug, Clone, PartialEq)]
+pub struct FetchResponse {
+    pub throttle_time_ms: i32,
+    pub session_id: i32,
+    pub responses: Vec<FetchableTopicResponse>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct FetchableTopicResponse {
+    pub topic_id: [u8; 16],
+    pub partitions: Vec<FetchablePartitionResponse>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct FetchablePartitionResponse {
+    pub partition_index: i32,
+    pub error_code: i16,
+    pub high_watermark: i64,
+}
+
+impl FetchResponse {
+    pub fn empty() -> Self {
+        Self {
+            throttle_time_ms: 0,
+            session_id: 0,
+            responses: vec![],
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
 pub enum ResponsePayload {
     ApiVersions(ApiVersionsResponse),
     DescribeTopicPartitions(DescribeTopicPartitionsResponse),
+    Fetch(FetchResponse),
 }
 
 #[derive(Debug, Clone)]
